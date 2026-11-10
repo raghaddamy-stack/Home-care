@@ -8,7 +8,7 @@ import { buildQuote, isQuoteExpired, quoteValidUntil, type Coverage, type Urgenc
 import { cancellationFee, prepaymentRequired } from '../domain/patientPolicy.js';
 import { cfg } from '../settings.js';
 import { buildInvoiceLines } from '../domain/billing.js';
-import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
 import { createInvoice } from './visits.js';
 
 const PatientInput = z.object({
@@ -294,6 +294,7 @@ export function requestRoutes(db: Db): Router {
   }));
 
   r.get('/', wrap((req) => {
+    requireStaff(db, req);
     // ?status=A,B filters; each row carries the patient name and the requested services for the boards.
     const statuses = (req.query.status as string | undefined)?.split(',').filter(Boolean) ?? [];
     const where = statuses.length ? `WHERE r.status IN (${statuses.map(() => '?').join(',')})` : '';
@@ -310,6 +311,7 @@ export function requestRoutes(db: Db): Router {
   }));
 
   r.get('/:id', wrap((req) => {
+    requireStaff(db, req);
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
     return {
       ...request,
@@ -326,7 +328,7 @@ export function requestRoutes(db: Db): Router {
   }));
 
   // BR-12 sweep, run by the scheduler every few minutes (like /shifts/check-late).
-  r.post('/expire-quotes', wrap((req) => ({ expired: expireQuotes(db, now(req)) })));
+  r.post('/expire-quotes', wrap((req) => { requireRole(db, req, 'COORDINATOR', 'AGENT'); return { expired: expireQuotes(db, now(req)) }; }));
 
   // Call center fills in missing data, then the request returns to review.
   r.post('/:id/complete-info', wrap((req) => {

@@ -9,7 +9,7 @@ import { splitShares, taxFor, taxLineFor } from '../domain/tax.js';
 import { onInvoiceIssued } from '../einvoice/service.js';
 import { recordPayment } from '../payments.js';
 import { noShowFee, prepaymentRequired } from '../domain/patientPolicy.js';
-import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
 import { noShowDates, setStatus, visitFee } from './requests.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
@@ -84,6 +84,7 @@ export function visitRoutes(db: Db): Router {
   const r = Router();
 
   r.get('/', wrap((req) => {
+    requireStaff(db, req);
     const staffId = Number(req.query.staffId);
     return staffId
       ? db.all(`SELECT v.*, r.request_no, p.full_name, p.address, p.lat, p.lng,

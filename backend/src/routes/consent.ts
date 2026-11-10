@@ -7,7 +7,7 @@ import {
   CONSENT_METHODS, CONSENT_TYPES, consentsNeededFor, hasValidConsent, SIGNER_RELATIONS, signerError,
   type ConsentMethod, type ConsentType, type SignerRelation,
 } from '../domain/consent.js';
-import { audit, getOr404, HttpError, now, requireRole, wrap } from '../http.js';
+import { audit, getOr404, HttpError, now, requireRole, wrap, requireStaff } from '../http.js';
 
 export const ConsentInput = z.object({
   types: z.array(z.enum(CONSENT_TYPES)).min(1).default(['GENERAL_TREATMENT']),
@@ -58,6 +58,7 @@ export function consentRoutes(db: Db): Router {
   const r = Router();
 
   r.get('/patients/:id/consents', wrap((req) => {
+    requireStaff(db, req);
     const p = getOr404(db, 'patients', req.params.id, 'Patient');
     const t = now(req);
     const rows = db.all<any>('SELECT * FROM consents WHERE patient_id = ? ORDER BY id DESC', p.id);

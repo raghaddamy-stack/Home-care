@@ -6,7 +6,7 @@ import type { Db, Row } from '../db.js';
 import { needsEscalation, scoreNews2 } from '../domain/news2.js';
 import { billableMinutes, buildRoster, distanceMetres, isLate, SHIFT_PATTERNS, workingTimeViolations, type TimeSlot } from '../domain/shifts.js';
 import { dueAt, isOverdue, timerFor } from '../domain/escalation.js';
-import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
 import { assertStaffAvailable, genderCheck, setStatus } from './requests.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
@@ -51,6 +51,20 @@ function openEscalation(db: Db, episodeId: number, trigger: string, level: strin
  * - NEWS2 5–6 with no new vitals within 15 min: the nurse is told to recheck;
  * - non-critical results the doctor has not reviewed are released to the patient after 24 h.
  */
+/** Flag shifts whose nurse has not checked in after the grace period (also run by the server every few minutes). */
+export function checkLateShifts(db: Db, t: Date): number[] {
+  const open = db.all(`SELECT * FROM shifts WHERE status = 'PLANNED' AND planned_start <= ?`, t.toISOString());
+  const late = open.filter((s) => isLate(new Date(s.planned_start), null, t));
+  db.tx(() => {
+    for (const s of late) {
+      db.update('shifts', s.id, { status: 'LATE' });
+      openEscalation(db, s.episode_id, 'LATE_SHIFT', 'OPS', 'Call nurse; send backup if no ETA in 15 min', t, s.id);
+      notify(db, 'role:COORDINATOR', 'PUSH', `Shift ${s.id}: nurse not checked in, send a backup`);
+    }
+  });
+  return late.map((s) => s.id);
+}
+
 export function runEscalationTimers(db: Db, at: Date) {
   const iso = at.toISOString();
   const escalated: number[] = [];
@@ -166,6 +180,7 @@ export function clinicalRoutes(db: Db): Router {
   }));
 
   r.get('/episodes/:id', wrap((req) => {
+    requireStaff(db, req);
     const ep = getOr404(db, 'episodes', req.params.id, 'Episode');
     return {
       ...ep,
@@ -215,6 +230,7 @@ export function clinicalRoutes(db: Db): Router {
 
   // Department worklist.
   r.get('/orders', wrap((req) => {
+    requireStaff(db, req);
     const dept = req.query.department as string | undefined;
     return db.all(
       `SELECT o.*, s.name_en, s.name_ar FROM orders o JOIN services s ON s.code = o.service_code
@@ -300,6 +316,7 @@ export function clinicalRoutes(db: Db): Router {
   }));
 
   r.get('/shifts', wrap((req) => {
+    requireStaff(db, req);
     const nurseId = Number(req.query.nurseId);
     return db.all(
       `SELECT s.*, e.episode_no, p.full_name, p.address FROM shifts s JOIN episodes e ON e.id = s.episode_id JOIN patients p ON p.id = e.patient_id
@@ -308,19 +325,10 @@ export function clinicalRoutes(db: Db): Router {
     );
   }));
 
-  // Scheduler / coordinator board: flag shifts with no check-in after the 15-min grace.
+  // Coordinator board / scheduler: flag shifts with no check-in after the grace period.
   r.post('/shifts/check-late', wrap((req) => {
-    const t = now(req);
-    const open = db.all(`SELECT * FROM shifts WHERE status = 'PLANNED' AND planned_start <= ?`, t.toISOString());
-    const late = open.filter((s) => isLate(new Date(s.planned_start), null, t));
-    db.tx(() => {
-      for (const s of late) {
-        db.update('shifts', s.id, { status: 'LATE' });
-        openEscalation(db, s.episode_id, 'LATE_SHIFT', 'OPS', 'Call nurse; send backup if no ETA in 15 min', t, s.id);
-        notify(db, 'role:COORDINATOR', 'PUSH', `Shift ${s.id}: nurse not checked in, send a backup`);
-      }
-    });
-    return { late: late.map((s) => s.id) };
+    requireRole(db, req, 'COORDINATOR', 'SUPERVISOR');
+    return { late: checkLateShifts(db, now(req)) };
   }));
 
   // Send a backup nurse for a late / missed shift.
@@ -395,7 +403,7 @@ export function clinicalRoutes(db: Db): Router {
   }));
 
   // §5.5 timer sweep, run by the scheduler every minute (like /shifts/check-late).
-  r.post('/escalations/check-timers', wrap((req) => runEscalationTimers(db, now(req))));
+  r.post('/escalations/check-timers', wrap((req) => { requireRole(db, req, 'COORDINATOR', 'SUPERVISOR', 'DOCTOR'); return runEscalationTimers(db, now(req)); }));
 
   r.post('/escalations/:id/ack', wrap((req) => {
     const staff = requireRole(db, req, 'DOCTOR', 'SUPERVISOR');

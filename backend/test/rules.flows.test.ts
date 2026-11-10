@@ -62,8 +62,8 @@ describe('BR-12 quote validity', () => {
   it('same-day quotes last 4 h, and the sweep expires open quotes', async () => {
     const { body } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'LAB-CBC' }], urgency: 'SAME_DAY' }, AGENT);
     await post(`/api/requests/${body.id}/quote`, {}, COORD, T0);
-    expect((await post('/api/requests/expire-quotes', {}, null, at(T0, 3))).body.expired).toEqual([]);
-    expect((await post('/api/requests/expire-quotes', {}, null, at(T0, 5))).body.expired).toEqual([body.id]);
+    expect((await post('/api/requests/expire-quotes', {}, COORD, at(T0, 3))).body.expired).toEqual([]);
+    expect((await post('/api/requests/expire-quotes', {}, COORD, at(T0, 5))).body.expired).toEqual([body.id]);
     expect((await post(`/api/requests/${body.id}/accept`, {}, COORD, at(T0, 5))).status).toBe(409);
   });
 });
@@ -80,7 +80,7 @@ describe('BR-23 cancellation fee by notice time', () => {
   it('50% between 24 h and 2 h, on a draft invoice; the preview shows the same fee', async () => {
     const id = await accepted(); // DOC-VISIT 35 JOD cash
     await schedule(id, at(T0, 30));
-    const preview = await request(app).get(`/api/requests/${id}`).set('x-now', at(T0, 20));
+    const preview = await request(app).get(`/api/requests/${id}`).set('x-staff-id', String(COORD)).set('x-now', at(T0, 20));
     expect(preview.body.cancellation).toMatchObject({ pct: 50, fee: 17_500 });
     const c = await post(`/api/requests/${id}/cancel`, { reason: 'Feeling better' }, AGENT, at(T0, 20));
     expect(c.body).toMatchObject({ fee: 17_500, feePct: 50 });
@@ -188,13 +188,13 @@ describe('§5.5 escalation timers', () => {
     const ep = await episode();
     const order = await post(`/api/episodes/${ep}/orders`, { serviceCode: 'LAB-PANEL' }, DOCTOR);
     const res = await post(`/api/orders/${order.body.id}/result`, { report: 'K+ 6.9', critical: true }, LAB, at(T0, 3));
-    expect((await post('/api/escalations/check-timers', {}, null, at(T0, 3.4))).body.escalated).toEqual([]);
-    const sweep = await post('/api/escalations/check-timers', {}, null, at(T0, 3.6));
+    expect((await post('/api/escalations/check-timers', {}, COORD, at(T0, 3.4))).body.escalated).toEqual([]);
+    const sweep = await post('/api/escalations/check-timers', {}, COORD, at(T0, 3.6));
     expect(sweep.body.escalated).toHaveLength(1);
     expect(db.get(`SELECT * FROM notifications WHERE recipient = 'role:MEDICAL_DIRECTOR'`)).toBeTruthy();
     expect(db.get('SELECT escalated_at FROM results WHERE id = ?', res.body.id)!.escalated_at).toBeTruthy();
     // Swept once only.
-    expect((await post('/api/escalations/check-timers', {}, null, at(T0, 4))).body.escalated).toEqual([]);
+    expect((await post('/api/escalations/check-timers', {}, COORD, at(T0, 4))).body.escalated).toEqual([]);
   });
 
   it('outpatient critical results are escalated too (they have no episode)', async () => {
@@ -203,7 +203,7 @@ describe('§5.5 escalation timers', () => {
     await post(`/api/visits/${s.visitId}/dispatch`, {}, LAB);
     await post(`/api/visits/${s.visitId}/check-in`, { ...HOME, consent: CONSENT }, LAB, at(T0, 2));
     const done = await post(`/api/visits/${s.visitId}/complete`, { result: { report: 'Hb 5.9', critical: true } }, LAB, at(T0, 2.2));
-    const sweep = await post('/api/escalations/check-timers', {}, null, at(T0, 2.8));
+    const sweep = await post('/api/escalations/check-timers', {}, COORD, at(T0, 2.8));
     expect(sweep.body.escalatedResults).toEqual([done.body.resultId]);
   });
 
@@ -214,7 +214,7 @@ describe('§5.5 escalation timers', () => {
     await post(`/api/shifts/${body.ids[0]}/check-in`, HOME, RANA, at(T0, 24));
     const v = await post(`/api/shifts/${body.ids[0]}/vitals`, { respRate: 22, spo2: 97, onOxygen: false, systolicBp: 125, heartRate: 115, consciousness: 'A', temperature: 38.5 }, RANA, at(T0, 25));
     expect(v.body.news2.band).toBe('MEDIUM');
-    const sweep = await post('/api/escalations/check-timers', {}, null, at(T0, 25.3));
+    const sweep = await post('/api/escalations/check-timers', {}, COORD, at(T0, 25.3));
     expect(sweep.body.escalated).toEqual([v.body.escalationId]);
     expect(sweep.body.recheck).toEqual([v.body.escalationId]);
     expect(db.get(`SELECT * FROM notifications WHERE recipient = 'staff:${RANA}' AND message LIKE 'Recheck vitals%'`)).toBeTruthy();

@@ -6,6 +6,8 @@ import { Db } from './db.js';
 import { seed } from './seed.js';
 import { processEInvoiceQueue, setQueueKick } from './einvoice/service.js';
 import { deliverWebhooks } from './webhooks.js';
+import { checkLateShifts, runEscalationTimers } from './routes/clinical.js';
+import { expireQuotes } from './routes/requests.js';
 
 const db = new Db(process.env.DB_PATH ?? 'homecare.db');
 seed(db);
@@ -24,6 +26,11 @@ const runJobs = async () => {
   if (busy) return;
   busy = true;
   try {
+    // Time-based rules: late check-ins, escalation deadlines, quote expiry.
+    const t = new Date();
+    checkLateShifts(db, t);
+    runEscalationTimers(db, t);
+    expireQuotes(db, t);
     await processEInvoiceQueue(db);
     await deliverWebhooks(db);
   } catch (e) {

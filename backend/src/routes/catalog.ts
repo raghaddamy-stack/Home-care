@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Db } from '../db.js';
-import { getOr404, HttpError, requireRole, wrap } from '../http.js';
+import { getOr404, HttpError, requireRole, wrap, requireStaff } from '../http.js';
 
 export function catalogRoutes(db: Db): Router {
   const r = Router();
@@ -31,6 +31,7 @@ export function catalogRoutes(db: Db): Router {
 
   // Patient lookup by national ID (intake step "بحث / فتح ملف").
   r.get('/patients', wrap((req) => {
+    requireStaff(db, req);
     const nid = req.query.nationalId as string | undefined;
     const q = req.query.q as string | undefined;
     if (nid) {
@@ -43,6 +44,7 @@ export function catalogRoutes(db: Db): Router {
 
   // Patient file: everything about one patient.
   r.get('/patients/:id', wrap((req) => {
+    requireStaff(db, req);
     const p = getOr404(db, 'patients', req.params.id, 'Patient');
     return {
       ...p,
@@ -59,12 +61,14 @@ export function catalogRoutes(db: Db): Router {
   }));
 
   r.get('/notifications', wrap((req) => {
+    requireStaff(db, req);
     const to = req.query.recipient as string | undefined;
     return db.all('SELECT * FROM notifications WHERE (? IS NULL OR recipient = ?) ORDER BY id DESC LIMIT 100', to ?? null, to ?? null);
   }));
 
   // Coordinator board feeds.
   r.get('/episodes', wrap((req) => {
+    requireStaff(db, req);
     const status = (req.query.status as string | undefined) ?? null;
     return db.all(
       `SELECT e.*, p.full_name, p.address,
@@ -78,6 +82,7 @@ export function catalogRoutes(db: Db): Router {
   }));
 
   r.get('/escalations', wrap((req) => {
+    requireStaff(db, req);
     const status = (req.query.status as string | undefined) ?? null;
     return db.all(
       `SELECT x.*, e.episode_no, p.full_name FROM escalations x JOIN episodes e ON e.id = x.episode_id JOIN patients p ON p.id = e.patient_id

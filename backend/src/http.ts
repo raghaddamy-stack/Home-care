@@ -30,6 +30,10 @@ export function wrapAsync(fn: (req: Request, res: Response) => Promise<unknown>)
 }
 
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+  // Malformed JSON or an oversized body from express.json().
+  const bp = err as { type?: string; status?: number };
+  if (bp?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Request body is not valid JSON' });
+  if (bp?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large' });
   if (err instanceof ZodError) return res.status(400).json({ error: 'Invalid input', issues: err.issues });
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   if (err instanceof SettingsError) return res.status(400).json({ error: err.message });
@@ -46,6 +50,13 @@ export function actor(db: Db, req: Request): Row | undefined {
   const id = Number(req.header('x-staff-id'));
   if (!id) return undefined;
   return db.get('SELECT * FROM staff WHERE id = ? AND active = 1', id);
+}
+
+/** Any signed-in staff member (office or field). */
+export function requireStaff(db: Db, req: Request): Row {
+  const s = actor(db, req);
+  if (!s) throw new HttpError(401, 'Missing or unknown x-staff-id');
+  return s;
 }
 
 export function requireRole(db: Db, req: Request, ...roles: string[]): Row {

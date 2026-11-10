@@ -82,7 +82,7 @@ describe('outpatient path (lab at home)', () => {
     expect(done.status).toBe(200);
     expect(done.body.status).toBe('COMPLETED');
 
-    const file = await request(app).get(`/api/patients/${created.body.patient_id}`);
+    const file = await request(app).get(`/api/patients/${created.body.patient_id}`).set('x-staff-id', String(COORD));
     expect(file.body.results).toHaveLength(2);
     expect(file.body.invoices[0].status).toBe('PAID');
   });
@@ -143,7 +143,7 @@ describe('home care path', () => {
     const { episodeId } = await admit();
     const order = await post(`/api/episodes/${episodeId}/orders`, { serviceCode: 'LAB-PANEL', priority: 'URGENT' }, DOCTOR);
     expect(order.body.department).toBe('LAB');
-    const worklist = await request(app).get('/api/orders?department=LAB');
+    const worklist = await request(app).get('/api/orders?department=LAB').set('x-staff-id', String(LAB));
     expect(worklist.body).toHaveLength(1);
     const res = await post(`/api/orders/${order.body.id}/result`, { report: 'K+ 6.8 mmol/L', critical: true }, LAB);
     expect(db.get(`SELECT status FROM escalations WHERE trigger = 'CRITICAL_RESULT'`)!.status).toBe('OPEN');
@@ -161,7 +161,7 @@ describe('home care path', () => {
     const [first, second] = roster.body.ids as number[];
 
     // Rana does not show up: flagged after the 15-minute grace, Maya covers.
-    const late = await post('/api/shifts/check-late', {}, null, '2026-11-02T07:20:00Z');
+    const late = await post('/api/shifts/check-late', {}, COORD, '2026-11-02T07:20:00Z');
     expect(late.body.late).toEqual([first]);
     const { body: cover } = await post(`/api/shifts/${first}/reassign`, { nurseId: MAYA }, COORD, '2026-11-02T07:22:00Z');
     expect((await post(`/api/shifts/${cover.newShiftId}/check-in`, HOME, RANA)).status).toBe(403);
@@ -192,7 +192,7 @@ describe('home care path', () => {
 
     const dis = await post(`/api/episodes/${episodeId}/discharge`, { summary: 'Recovered mobility, family trained on transfers' }, DOCTOR, '2026-11-04T12:00:00Z');
     expect(dis.body.status).toBe('DISCHARGED');
-    const file = (await request(app).get(`/api/patients/${patientId}`)).body;
+    const file = (await request(app).get(`/api/patients/${patientId}`).set('x-staff-id', String(COORD))).body;
     expect(file.allergies).toEqual(['Penicillin']);
     expect(file.episodes[0].status).toBe('DISCHARGED');
   });
