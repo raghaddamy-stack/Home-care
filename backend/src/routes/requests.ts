@@ -20,7 +20,7 @@ const PatientInput = z.object({
   emergencyContact: z.string().optional(),
 });
 
-const CreateRequest = z.object({
+export const CreateRequest = z.object({
   channel: z.enum(['APP', 'CALL_CENTER']),
   patient: PatientInput,
   items: z.array(z.object({ serviceCode: z.string(), qty: z.number().positive().default(1) })).min(1),
@@ -118,52 +118,56 @@ export function assertStaffAvailable(db: Db, staffId: number, roles: string[], a
   return s;
 }
 
+/** Shared by call-center intake and the patient app: find/create the patient file, then the request. */
+export function createServiceRequest(db: Db, body: z.infer<typeof CreateRequest>, staffId?: number) {
+  const staff = staffId ? { id: staffId } : undefined;
+  return db.tx(() => {
+    for (const it of body.items) {
+      if (!db.get('SELECT 1 FROM services WHERE code = ?', it.serviceCode)) throw new HttpError(400, `Unknown service ${it.serviceCode}`);
+    }
+    const patientId = upsertPatient(db, body.patient);
+    let policyId: number | undefined;
+    if (body.insurance) {
+      const pol = db.get('SELECT id FROM insurance_policies WHERE patient_id = ? AND payer_id = ? AND member_no = ?', patientId, body.insurance.payerId, body.insurance.memberNo);
+      policyId = pol?.id ?? db.insert('insurance_policies', { patient_id: patientId, payer_id: body.insurance.payerId, member_no: body.insurance.memberNo });
+    }
+    const count = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM service_requests')!.n;
+    const id = db.insert('service_requests', {
+      request_no: `REQ-${String(count + 1).padStart(6, '0')}`,
+      patient_id: patientId,
+      channel: body.channel,
+      created_by: staff?.id,
+      status: 'SUBMITTED',
+      urgency: body.urgency,
+      preferred_at: body.preferredAt,
+      clinical_notes: body.clinicalNotes,
+      prescription_ref: body.prescriptionRef,
+      policy_id: policyId,
+    });
+    db.insert('request_history', { request_id: id, to_status: 'SUBMITTED', actor_id: staff?.id, note: body.channel });
+    for (const it of body.items) db.insert('request_items', { request_id: id, service_code: it.serviceCode, qty: it.qty });
+
+    const request = getOr404(db, 'service_requests', id);
+    const missing = missingInfo(db, request);
+    if (missing.length) {
+      setStatus(db, request, 'PENDING_INFO', staff?.id, `Missing: ${missing.join(', ')}`);
+      notify(db, `role:AGENT`, 'PUSH', `${request.request_no}: call patient to complete ${missing.join(', ')}`);
+    } else {
+      setStatus(db, request, 'UNDER_REVIEW', staff?.id);
+      notify(db, 'role:COORDINATOR', 'PUSH', `New request ${request.request_no} to review`);
+    }
+    return { ...request, missing };
+  });
+}
+
 export function requestRoutes(db: Db): Router {
   const r = Router();
 
+  // Staff-entered requests (call center). Patients book through /api/me/requests.
   r.post('/', wrap((req, res) => {
+    const staff = requireRole(db, req, 'AGENT', 'COORDINATOR');
     const body = CreateRequest.parse(req.body);
-    const staff = actor(db, req);
-    if (body.channel === 'CALL_CENTER' && !staff) throw new HttpError(401, 'Call-center requests need x-staff-id');
-
-    const out = db.tx(() => {
-      for (const it of body.items) {
-        if (!db.get('SELECT 1 FROM services WHERE code = ?', it.serviceCode)) throw new HttpError(400, `Unknown service ${it.serviceCode}`);
-      }
-      const patientId = upsertPatient(db, body.patient);
-      let policyId: number | undefined;
-      if (body.insurance) {
-        const pol = db.get('SELECT id FROM insurance_policies WHERE patient_id = ? AND payer_id = ? AND member_no = ?', patientId, body.insurance.payerId, body.insurance.memberNo);
-        policyId = pol?.id ?? db.insert('insurance_policies', { patient_id: patientId, payer_id: body.insurance.payerId, member_no: body.insurance.memberNo });
-      }
-      const count = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM service_requests')!.n;
-      const id = db.insert('service_requests', {
-        request_no: `REQ-${String(count + 1).padStart(6, '0')}`,
-        patient_id: patientId,
-        channel: body.channel,
-        created_by: staff?.id,
-        status: 'SUBMITTED',
-        urgency: body.urgency,
-        preferred_at: body.preferredAt,
-        clinical_notes: body.clinicalNotes,
-        prescription_ref: body.prescriptionRef,
-        policy_id: policyId,
-      });
-      db.insert('request_history', { request_id: id, to_status: 'SUBMITTED', actor_id: staff?.id, note: body.channel });
-      for (const it of body.items) db.insert('request_items', { request_id: id, service_code: it.serviceCode, qty: it.qty });
-
-      const request = getOr404(db, 'service_requests', id);
-      const missing = missingInfo(db, request);
-      if (missing.length) {
-        setStatus(db, request, 'PENDING_INFO', staff?.id, `Missing: ${missing.join(', ')}`);
-        notify(db, `role:AGENT`, 'PUSH', `${request.request_no}: call patient to complete ${missing.join(', ')}`);
-      } else {
-        setStatus(db, request, 'UNDER_REVIEW', staff?.id);
-        notify(db, 'role:COORDINATOR', 'PUSH', `New request ${request.request_no} to review`);
-      }
-      return { ...request, missing };
-    });
-    res.status(201).json(out);
+    res.status(201).json(createServiceRequest(db, body, staff.id));
   }));
 
   r.get('/', wrap((req) => {
@@ -268,7 +272,9 @@ export function requestRoutes(db: Db): Router {
     });
   }));
 
+  // Agent / coordinator records an acceptance given by phone (patients accept in the app via /api/me).
   r.post('/:id/accept', wrap((req) => {
+    requireRole(db, req, 'AGENT', 'COORDINATOR');
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
     return db.tx(() => {
       setStatus(db, request, 'ACCEPTED', actor(db, req)?.id, req.body?.evidence ?? 'app');
@@ -279,6 +285,7 @@ export function requestRoutes(db: Db): Router {
   }));
 
   r.post('/:id/cancel', wrap((req) => {
+    requireRole(db, req, 'AGENT', 'COORDINATOR');
     const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body);
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
     return db.tx(() => {

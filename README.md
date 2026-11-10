@@ -27,6 +27,7 @@ React + Vite, Arabic right-to-left, light and dark themes. Pick a demo account o
 | Call center | الكول سنتر | Phone intake: national-ID lookup or new file, services with cash estimate, insurance, and a follow-up list for requests with missing data |
 | Coordinator | لوحة المنسق | Request board (review → patient approval → scheduling → in the field); drawer to price (discount approval, pre-approval no.), record phone acceptance, route and assign staff (same-zone first), cancel with reason, history. Home-care tab builds rosters from the doctor's care plan. Alerts tab: late check-ins with backup nurse, open escalations |
 | Nurse / doctor / lab / radiology / driver | تطبيق الكادر | Mobile layout. Visits: on my way, check in by GPS or patient code, no-show, finish with result / device handover / payment. Assessment visits open the episode or refer out. Nurses: shifts, vitals with live NEWS2, notes, handover and check-out. Doctors: case list with escalations, results to review, care plan, orders, discharge. Departments: order worklist |
+| Patient / family | تطبيق المريض (`/#patient`) | Sign in with national ID + SMS code (shown on screen in dev), book services, complete the file (GPS from the phone), approve or decline the price, track the request step by step, see the visit time, staff name and visit code, results and invoices |
 | Finance | المالية | Run the weekly/monthly cycle, review lines, issue (blocked if hours ≠ attendance), record payments |
 
 ## Backend (`backend/`)
@@ -71,6 +72,6 @@ Authentication is a placeholder: send `x-staff-id` (see `src/seed.ts` for demo s
 ### Next steps
 
 1. Real authentication and role-based access (JWT/SSO) plus an audit of clinical reads.
-2. Patient app (booking, quote acceptance by OTP, live tracking, results, invoices) and native packaging of the staff app.
+2. Staff sign-in with passwords/SSO (staff routes still trust `x-staff-id`), SMS gateway for patient codes, native packaging of the apps.
 3. Consent forms, MAR and medication reconciliation, guardian portal (see BRD §6).
 4. SMS/push gateway, payment gateway, LIS/PACS and insurer integrations.

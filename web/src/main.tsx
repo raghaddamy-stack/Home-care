@@ -6,6 +6,7 @@ import { CallCenter } from './screens/CallCenter';
 import { Coordinator } from './screens/Coordinator';
 import { FieldApp } from './screens/FieldApp';
 import { Finance } from './screens/Finance';
+import { loadPatientToken, PatientApp } from './screens/PatientApp';
 import './styles.css';
 
 type View = 'board' | 'intake' | 'field' | 'finance';
@@ -17,14 +18,15 @@ const VIEWS: Record<View, { label: string; roles: string[] }> = {
   finance: { label: 'المالية', roles: ['FINANCE', 'ADMIN'] },
 };
 
-function Login({ onPick }: { onPick: (s: Staff) => void }) {
+function Login({ onPick, onPatient }: { onPick: (s: Staff) => void; onPatient: () => void }) {
   const { data, error } = useLoad(() => api.get<Staff[]>('/staff'));
   return (
     <main className="login">
       <div className="login-card">
         <span className="eyebrow">Home Care · Operations</span>
         <h1>رعاية</h1>
-        <p className="muted">اختر حسابك للدخول. (نسخة تجريبية: الدخول الحقيقي بكلمة سر يجي بالمرحلة الجاية.)</p>
+        <button className="primary block" onClick={onPatient}>أنا مريض أو من عائلة مريض</button>
+        <p className="muted">دخول الموظفين: اختر حسابك. (نسخة تجريبية: الدخول بكلمة سر يجي بالمرحلة الجاية.)</p>
         {error && <p className="error">تعذّر الاتصال بالخادم: {error}</p>}
         <div className="login-list">
           {data?.map((s) => (
@@ -43,6 +45,7 @@ function App() {
   const [me, setMe] = useState<Staff | null>(() => {
     try { return JSON.parse(localStorage.getItem('hc.me') ?? 'null'); } catch { return null; }
   });
+  const [patientMode, setPatientMode] = useState(() => location.hash === '#patient' || !!loadPatientToken());
   const allowed = (Object.keys(VIEWS) as View[]).filter((v) => me && VIEWS[v].roles.includes(me.role));
   const [view, setView] = useState<View>('board');
   setStaff(me?.id ?? null);
@@ -57,7 +60,8 @@ function App() {
     setMe(s);
   };
 
-  if (!me) return <Login onPick={pick} />;
+  if (patientMode) return <PatientApp onExit={() => { setPatientMode(false); if (location.hash) history.replaceState(null, '', ' '); }} />;
+  if (!me) return <Login onPick={pick} onPatient={() => setPatientMode(true)} />;
   return (
     <div className="shell">
       <header className="topbar">

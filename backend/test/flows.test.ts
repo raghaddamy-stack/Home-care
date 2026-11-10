@@ -32,7 +32,7 @@ beforeEach(() => {
 
 describe('intake', () => {
   it('parks incomplete requests in PENDING_INFO and resumes after the call', async () => {
-    const res = await post('/api/requests', { channel: 'APP', patient: { nationalId: '9000000001', fullName: 'Mona' }, items: [{ serviceCode: 'LAB-CBC' }] }, null);
+    const res = await post('/api/requests', { channel: 'APP', patient: { nationalId: '9000000001', fullName: 'Mona' }, items: [{ serviceCode: 'LAB-CBC' }] }, AGENT);
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('PENDING_INFO');
     expect(res.body.missing).toContain('gps location');
@@ -42,13 +42,13 @@ describe('intake', () => {
   });
 
   it('reuses the patient file by national ID', async () => {
-    await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'LAB-CBC' }] }, null);
+    await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'LAB-CBC' }] }, AGENT);
     await post('/api/requests', { channel: 'CALL_CENTER', patient: { nationalId: patient.nationalId, fullName: patient.fullName }, items: [{ serviceCode: 'DOC-VISIT' }] }, AGENT);
     expect(db.get('SELECT COUNT(*) AS n FROM patients')!.n).toBe(1);
   });
 
   it('requires a supervisor for discounts above 10%', async () => {
-    const { body } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'LAB-CBC' }] }, null);
+    const { body } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'LAB-CBC' }] }, AGENT);
     expect((await post(`/api/requests/${body.id}/quote`, { discountPct: 20 }, COORD)).status).toBe(403);
     expect((await post(`/api/requests/${body.id}/quote`, { discountPct: 20, approvedBy: SUPERVISOR }, COORD)).status).toBe(200);
   });
@@ -63,7 +63,7 @@ describe('outpatient path (lab at home)', () => {
     const quote = await post(`/api/requests/${id}/quote`, { scheduledAt: '2026-11-11T08:00:00Z' }, COORD);
     expect(quote.body.total).toBe(20_000);
 
-    expect((await post(`/api/requests/${id}/accept`, {}, null)).body.status).toBe('ACCEPTED');
+    expect((await post(`/api/requests/${id}/accept`, {}, COORD)).body.status).toBe('ACCEPTED');
 
     // Coordinator cannot send a driver to take blood.
     expect((await post(`/api/requests/${id}/schedule`, { route: 'DIRECT', staffId: DRIVER, scheduledAt: '2026-11-11T08:00:00Z' }, COORD)).status).toBe(409);
@@ -86,9 +86,9 @@ describe('outpatient path (lab at home)', () => {
   });
 
   it('charges a no-show fee and allows rescheduling', async () => {
-    const { body } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'DOC-VISIT' }] }, null);
+    const { body } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'DOC-VISIT' }] }, AGENT);
     await post(`/api/requests/${body.id}/quote`, {}, COORD);
-    await post(`/api/requests/${body.id}/accept`, {}, null);
+    await post(`/api/requests/${body.id}/accept`, {}, COORD);
     const { body: s } = await post(`/api/requests/${body.id}/schedule`, { route: 'DIRECT', staffId: DOCTOR, scheduledAt: '2026-11-11T10:00:00Z' }, COORD);
     await post(`/api/visits/${s.visitId}/dispatch`, {}, DOCTOR);
     const ns = await post(`/api/visits/${s.visitId}/no-show`, {}, DOCTOR);
@@ -113,9 +113,9 @@ describe('outpatient path (lab at home)', () => {
 
 describe('home care path', () => {
   async function admit() {
-    const { body: r } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'NRS-HOUR', qty: 1 }] }, null);
+    const { body: r } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'NRS-HOUR', qty: 1 }] }, AGENT);
     await post(`/api/requests/${r.id}/quote`, {}, COORD);
-    await post(`/api/requests/${r.id}/accept`, {}, null);
+    await post(`/api/requests/${r.id}/accept`, {}, COORD);
     const { body: s } = await post(`/api/requests/${r.id}/schedule`, { route: 'ASSESSMENT', staffId: DOCTOR, scheduledAt: '2026-11-01T09:00:00Z' }, COORD);
     await post(`/api/visits/${s.visitId}/dispatch`, {}, DOCTOR);
     const otp = db.get('SELECT otp FROM visits WHERE id = ?', s.visitId)!.otp;
@@ -126,9 +126,9 @@ describe('home care path', () => {
   }
 
   it('refers out when home care is not suitable', async () => {
-    const { body: r } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'DOC-VISIT' }] }, null);
+    const { body: r } = await post('/api/requests', { channel: 'APP', patient, items: [{ serviceCode: 'DOC-VISIT' }] }, AGENT);
     await post(`/api/requests/${r.id}/quote`, {}, COORD);
-    await post(`/api/requests/${r.id}/accept`, {}, null);
+    await post(`/api/requests/${r.id}/accept`, {}, COORD);
     const { body: s } = await post(`/api/requests/${r.id}/schedule`, { route: 'ASSESSMENT', staffId: RANA, scheduledAt: '2026-11-01T09:00:00Z' }, COORD);
     await post(`/api/visits/${s.visitId}/dispatch`, {}, RANA);
     await post(`/api/visits/${s.visitId}/check-in`, HOME, RANA);

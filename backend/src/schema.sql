@@ -326,3 +326,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail TEXT,
   at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Patient app sign-in: one-time codes sent by SMS, then a bearer session token.
+CREATE TABLE IF NOT EXISTS patient_otps (
+  id INTEGER PRIMARY KEY,
+  national_id TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  full_name TEXT,
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS patient_sessions (
+  token_hash TEXT PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  expires_at TEXT NOT NULL
+);

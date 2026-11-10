@@ -10,6 +10,8 @@ export interface RequestRow {
 
 let staffId: number | null = null;
 export const setStaff = (id: number | null) => { staffId = id; };
+let patientToken: string | null = null;
+export const setPatientToken = (t: string | null) => { patientToken = t; };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -18,6 +20,7 @@ export class ApiError extends Error {
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (staffId) headers['x-staff-id'] = String(staffId);
+  if (patientToken) headers.authorization = `Bearer ${patientToken}`;
   const res = await fetch(`/api${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
