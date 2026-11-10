@@ -1,0 +1,335 @@
+<title>Home Care BPMN</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Readex+Pro:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: vertical BPMN pool, lanes run right-to-left (Arabic reading order), phases as horizontal bands; a sticky detail card explains the selected step. */
+:root{
+  --bg:#F6F8F7; --surface:#FFFFFF; --fg:#16211F; --muted:#5B6B68; --line:#7D8C89; --grid:#DCE3E1;
+  --accent:#0E6E60; --accent-soft:#DDF0EC;
+  --core-fill:#FFFFFF; --core-stroke:#8A9895;
+  --out-fill:#ECEEFC; --out-stroke:#5A63C9; --out-ink:#2E3593;
+  --home-fill:#E2F3EF; --home-stroke:#2C8C7B; --home-ink:#0D5247;
+  --fin-fill:#FBF1DE; --fin-stroke:#B7862C; --fin-ink:#6E4E10;
+  --exc-fill:#FBE9E7; --exc-stroke:#C1574A; --exc-ink:#83291F;
+  --band-a:#F6F8F7; --band-b:#EEF3F1; --halo:#F6F8F7;
+  --f-display:"Readex Pro","IBM Plex Sans Arabic",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans Arabic","Segoe UI",Tahoma,system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#101615; --surface:#18201F; --fg:#E4ECEA; --muted:#97A7A3; --line:#7F918D; --grid:#2A3533;
+  --accent:#4CC2AE; --accent-soft:#173430;
+  --core-fill:#1B2422; --core-stroke:#6E7F7B;
+  --out-fill:#1E2140; --out-stroke:#8D95F0; --out-ink:#C9CDFB;
+  --home-fill:#14302B; --home-stroke:#4CB8A4; --home-ink:#B8EADF;
+  --fin-fill:#2E2615; --fin-stroke:#D6A64A; --fin-ink:#F0D9A6;
+  --exc-fill:#35201D; --exc-stroke:#E07D70; --exc-ink:#F6C4BC;
+  --band-a:#101615; --band-b:#141C1A; --halo:#101615; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#101615; --surface:#18201F; --fg:#E4ECEA; --muted:#97A7A3; --line:#7F918D; --grid:#2A3533;
+  --accent:#4CC2AE; --accent-soft:#173430;
+  --core-fill:#1B2422; --core-stroke:#6E7F7B;
+  --out-fill:#1E2140; --out-stroke:#8D95F0; --out-ink:#C9CDFB;
+  --home-fill:#14302B; --home-stroke:#4CB8A4; --home-ink:#B8EADF;
+  --fin-fill:#2E2615; --fin-stroke:#D6A64A; --fin-ink:#F0D9A6;
+  --exc-fill:#35201D; --exc-stroke:#E07D70; --exc-ink:#F6C4BC;
+  --band-a:#101615; --band-b:#141C1A; --halo:#101615; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.65}
+.wrap{max-width:1340px;margin:0 auto;padding-block:28px 0;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:grid;gap:6px;margin-bottom:18px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;color:var(--accent);text-transform:uppercase}
+h1{font-family:var(--f-display);font-weight:600;font-size:clamp(26px,3.4vw,36px);line-height:1.2;margin:0;text-wrap:balance}
+h2{font-family:var(--f-display);font-weight:600;font-size:21px;margin:0 0 10px;text-wrap:balance}
+.lede{color:var(--muted);max-width:68ch;margin:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin:14px 0 12px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend svg{flex:none}
+.chip{width:22px;height:14px;border-radius:4px;border:1.5px solid}
+.diagram{overflow-x:auto;background:var(--surface);border:1px solid var(--grid);border-radius:10px}
+.diagram svg{display:block}
+.node{cursor:pointer}
+.node:focus{outline:none}
+.node:focus-visible .shape,.node.sel .shape{stroke:var(--accent);stroke-width:3}
+.node:hover .shape{stroke-width:2.4}
+.t-title{font-family:var(--f-body);font-weight:600;font-size:12.5px}
+.t-sub{font-family:var(--f-body);font-size:10.5px}
+.e-lbl{font-family:var(--f-body);font-size:11px;fill:var(--muted);paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.g-lbl{font-family:var(--f-body);font-weight:500;font-size:11.5px;fill:var(--fg);paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.flow{fill:none;stroke:var(--line);stroke-width:1.4}
+.assoc{fill:none;stroke:var(--line);stroke-width:1.2;stroke-dasharray:3 4}
+.arrow{fill:var(--line)}
+.detail{position:sticky;bottom:0;z-index:5;margin-top:14px;background:var(--surface);border:1px solid var(--grid);border-top:3px solid var(--accent);border-radius:10px 10px 0 0;padding:14px 18px calc(14px + env(safe-area-inset-bottom,0px));box-shadow:0 -6px 24px rgba(0,0,0,.08);display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr);gap:8px 22px}
+.detail h3{font-family:var(--f-display);font-weight:600;font-size:17px;margin:0}
+.detail .k{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase;display:block}
+.detail p{margin:0;font-size:14px}
+.detail .mod{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:2px 10px;font-size:13px;font-weight:600}
+@media (max-width:760px){.detail{grid-template-columns:minmax(0,1fr)}}
+section.more{margin:34px 0 40px;display:grid;gap:14px}
+.tbl{overflow-x:auto;border:1px solid var(--grid);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th,td{text-align:right;padding:10px 14px;border-bottom:1px solid var(--grid);vertical-align:top}
+th{font-family:var(--f-display);font-weight:500;font-size:13px;color:var(--muted);background:var(--band-b)}
+tr:last-child td{border-bottom:0}
+td code{font-family:var(--f-mono);font-size:12.5px;color:var(--accent)}
+.num{font-family:var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+@media (prefers-reduced-motion:no-preference){.node .shape{transition:stroke-width .12s}}
+</style>
+
+<div class="wrap" dir="rtl" lang="ar">
+  <header>
+    <span class="eyebrow">BPMN 2.0 · End-to-end process</span>
+    <h1>مسار خدمة الرعاية المنزلية من الطلب للفاتورة</h1>
+    <p class="lede">مخطط عملية واحد بسبعة مسارات (Swimlanes): كل عمود جهة مسؤولة، وكل شريط أفقي مرحلة. اضغط على أي خطوة لتشوف مين بنفّذها وشو الشاشة أو الوحدة المقابلة إلها بالنظام.</p>
+  </header>
+
+  <div class="legend" aria-label="مفتاح الرموز">
+    <span><svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.6"/></svg>بداية</span>
+    <span><svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="8" fill="var(--surface)" stroke="var(--fg)" stroke-width="3.2"/></svg>نهاية</span>
+    <span><svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 2 22 12 12 22 2 12Z" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" stroke="var(--fg)" stroke-width="1.6"/></svg>بوابة قرار (XOR)</span>
+    <span><svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="9" fill="var(--surface)" stroke="var(--line)" stroke-width="1.3"/><circle cx="11" cy="11" r="6.6" fill="none" stroke="var(--line)" stroke-width="1.1"/><path d="M11 7.4V11h2.6" stroke="var(--fg)" stroke-width="1.3" fill="none"/></svg>حدث مؤقّت (مهلة)</span>
+    <span><i class="chip" style="background:var(--core-fill);border-color:var(--core-stroke)"></i>خطوة تشغيلية</span>
+    <span><i class="chip" style="background:var(--out-fill);border-color:var(--out-stroke)"></i>خدمة خارجية (Outpatient)</span>
+    <span><i class="chip" style="background:var(--home-fill);border-color:var(--home-stroke)"></i>رعاية منزلية</span>
+    <span><i class="chip" style="background:var(--fin-fill);border-color:var(--fin-stroke)"></i>مالية</span>
+    <span><i class="chip" style="background:var(--exc-fill);border-color:var(--exc-stroke)"></i>استثناء</span>
+  </div>
+
+  <div class="diagram" id="diagram" dir="ltr"></div>
+  <p class="hint">على الموبايل اسحب المخطط يمين ويسار. الخطوط المتقطعة ملاحظات وليست تسلسل.</p>
+
+  <aside class="detail" id="detail" aria-live="polite">
+    <div><span class="k">الخطوة</span><h3 id="d-title"></h3><p id="d-actor" style="color:var(--muted)"></p></div>
+    <div><span class="k">شو بصير</span><p id="d-what"></p></div>
+    <div><span class="k">بالنظام</span><p><span class="mod" id="d-mod"></span></p><p id="d-data" style="margin-top:6px;color:var(--muted);font-size:13px"></p></div>
+  </aside>
+
+  <section class="more">
+    <h2>من المخطط إلى وحدات النظام</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>#</th><th>الوحدة</th><th>المراحل اللي بتغطيها</th><th>حالات الطلب</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>الاستقبال وملف المريض</td><td>طلب من التطبيق أو الكول سنتر، بحث بالرقم الوطني، فحص اكتمال البيانات</td><td><code>NEW</code> · <code>PENDING_INFO</code></td></tr>
+        <tr><td class="num">2</td><td>لوحة المنسق والتسعير</td><td>مراجعة، قائمة أسعار أو تأمين، موافقة مسبقة، عرض سعر، توجيه</td><td><code>UNDER_REVIEW</code> · <code>QUOTED</code> · <code>CONFIRMED</code> · <code>CANCELLED</code></td></tr>
+        <tr><td class="num">3</td><td>الجدولة والتوصيل</td><td>تعيين حسب المنطقة والمهارة والتوفر، تتبّع، No-show، تسجيل وصول GPS/OTP</td><td><code>SCHEDULED</code> · <code>DISPATCHED</code> · <code>IN_PROGRESS</code> · <code>NO_SHOW</code></td></tr>
+        <tr><td class="num">4</td><td>الخدمات الخارجية</td><td>عينة بباركود، تصوير ورفع للـ PACS، تسليم جهاز وعقد إيجار، تحصيل، إرفاق النتائج</td><td><code>RESULTED</code> · <code>COMPLETED</code></td></tr>
+        <tr><td class="num">5</td><td>الملف الطبي والأوردرات (EMR)</td><td>تقييم، Episode of Care، خطة رعاية، أوردرات للأقسام، مراجعة النتائج</td><td>Episode: <code>ACTIVE</code> · <code>ON_HOLD</code> · <code>DISCHARGED</code></td></tr>
+        <tr><td class="num">6</td><td>الشفتات والحضور</td><td>جدول 8/12/24، Check-in بمهلة 15 دقيقة، ممرض بديل، ملاحظات، MAR، تسليم</td><td>Shift: <code>PLANNED</code> · <code>CHECKED_IN</code> · <code>COMPLETED</code> · <code>MISSED</code></td></tr>
+        <tr><td class="num">7</td><td>التصعيد السريري</td><td>حساب NEWS2 تلقائي، طبيب مناوب خلال 15 دقيقة، مدير طبي، إسعاف</td><td>Escalation: <code>OPEN</code> · <code>ACKED</code> · <code>RESOLVED</code></td></tr>
+        <tr><td class="num">8</td><td>الفوترة</td><td>فواتير أسبوعية أو شهرية حسب إعداد العقد، تأمين + حصة المريض، فاتورة نهائية</td><td>Invoice: <code>DRAFT</code> · <code>ISSUED</code> · <code>PAID</code> · <code>OVERDUE</code></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+</div>
+
+<script>
+(function(){
+const LW=172, PW=104, RH=82, TH=66, TOP=TH+40, ROWS=28;
+const W=PW+7*LW, H=TOP+(ROWS-1)*RH+RH;
+const DIR=-1; // lanes go right-to-left
+const lanes=[
+  {ar:'المريض / العائلة',en:'Patient'},
+  {ar:'الاستقبال',en:'App · Call center'},
+  {ar:'المنسق',en:'Coordinator'},
+  {ar:'وحدة التوصيل',en:'Logistics'},
+  {ar:'الطبيب والممرض',en:'Clinical'},
+  {ar:'الأقسام',en:'Lab · Imaging · Pharmacy · Equip.'},
+  {ar:'المالية',en:'Finance'}];
+const P=0,I=1,C=2,L=3,CL=4,D=5,F=6;
+const X=l=>W-PW-l*LW-LW/2, Y=r=>TOP+r*RH;
+const phases=[
+  {ar:'الاستقبال',a:0,b:4},{ar:'التسعير والتوجيه',a:5,b:10},{ar:'التعيين والتوصيل',a:11,b:14},
+  {ar:'تنفيذ الخدمة',a:15,b:20},{ar:'الرعاية المستمرة',a:21,b:24},{ar:'الفوترة والإنهاء',a:25,b:27}];
+
+// type: start|end|gw|task ; k: core|out|home|fin|exc
+const N={
+ start:{t:'start',l:P,r:0,ar:'حاجة لخدمة',actor:'المريض أو أحد أفراد العائلة',what:'المريض بحتاج فحص مخبري، صورة أشعة، جهاز أو تخت طبي، ممرض، أو زيارة طبيب.',mod:'—',data:''},
+ gw_channel:{t:'gw',l:P,r:1,ar:'قناة الطلب؟',actor:'المريض',what:'إما يطلب بنفسه من التطبيق، أو يتصل على الكول سنتر.',mod:'Intake',data:'channel = APP | CALL_CENTER'},
+ t_app:{t:'task',k:'core',l:P,r:2,ar:'طلب من التطبيق',sub:'اختيار الخدمة + الفورم',actor:'المريض',what:'يختار نوع الخدمة ويعبّي الفورم: بيانات المريض، العنوان والموقع، الوصف، الوقت المفضّل، التأمين ومرفقات (وصفة / تقارير).',mod:'تطبيق المريض',data:'ServiceRequest, Attachment'},
+ t_call:{t:'task',k:'core',l:I,r:2,ar:'الكول سنتر',sub:'الموظف يعبّي نفس الفورم',actor:'موظف الكول سنتر',what:'نفس الفورم بالضبط بس بعبّيه الموظف على شاشة الكول سنتر أثناء المكالمة.',mod:'شاشة الكول سنتر',data:'ServiceRequest (channel=CALL_CENTER)'},
+ t_lookup:{t:'task',k:'core',l:I,r:3,ar:'بحث / فتح ملف',sub:'بالرقم الوطني',actor:'النظام + موظف الاستقبال',what:'بحث بالرقم الوطني أو الهاتف عشان ما ينفتح ملف مكرر. إذا مش موجود بنفتح ملف مريض جديد.',mod:'ملف المريض',data:'Patient, Guardian, Address'},
+ gw_complete:{t:'gw',l:I,r:4,ar:'البيانات كاملة؟',actor:'النظام',what:'فحص الحقول الإلزامية حسب نوع الخدمة (مثلاً الأشعة بدها وصفة طبيب).',mod:'Intake',data:'status → PENDING_INFO'},
+ t_missing:{t:'task',k:'exc',l:P,r:4,ar:'استكمال البيانات',sub:'تواصل مع المريض',actor:'الكول سنتر',what:'تواصل مع المريض لاستكمال الناقص، والطلب بيرجع لنفس الفحص.',mod:'Intake',data:'Task: call patient'},
+ t_price:{t:'task',k:'core',l:C,r:5,ar:'مراجعة وتسعير',sub:'قائمة أسعار / تأمين',actor:'المنسق',what:'يراجع الطلب ويسعّره من قائمة الأسعار أو عقد التأمين. إذا في تأمين بنطلب موافقة مسبقة.',mod:'لوحة المنسق',data:'Quote, PreApproval, PriceList'},
+ t_quote:{t:'task',k:'core',l:C,r:6,ar:'إرسال عرض السعر',sub:'SMS / التطبيق',actor:'المنسق',what:'عرض السعر بوصل للمريض برسالة أو إشعار بالتطبيق، ومعه حصة التأمين وحصة المريض.',mod:'الإشعارات',data:'status → QUOTED'},
+ gw_accept:{t:'gw',l:P,r:7,ar:'يوافق على السعر؟',actor:'المريض',what:'المريض بوافق من التطبيق أو بالتلفون.',mod:'تطبيق المريض',data:''},
+ end_cancel:{t:'end',k:'exc',l:P,r:8,ar:'إلغاء + سبب',actor:'المنسق',what:'الطلب بيتسكّر مع تسجيل سبب الإلغاء للتقارير.',mod:'Intake',data:'status → CANCELLED'},
+ gw_route:{t:'gw',l:C,r:8,ar:'توجيه الطلب',actor:'المنسق',what:'المنسق بقرر: الحالة بدها تقييم طبيب؟ ولا ممرض مباشرة؟ ولا خدمة مباشرة (مختبر / أشعة / جهاز)؟',mod:'لوحة المنسق',data:'route = ASSESSMENT | NURSE | DIRECT'},
+ t_assign_clin:{t:'task',k:'home',l:CL,r:9,ar:'تعيين طبيب / ممرض',sub:'منطقة · مهارة · توفر',actor:'المنسق',what:'يختار طبيب للتقييم أو ممرض مباشرة حسب المنطقة والتخصص والتوفر. إذا ما في حدا متاح بنقترح وقت تاني.',mod:'الجدولة',data:'Assignment'},
+ t_assign_dept:{t:'task',k:'out',l:D,r:10,ar:'توجيه القسم',sub:'مختبر / أشعة / جهاز',actor:'المنسق',what:'يحوّل الطلب للقسم المعني: المختبر يروح يسحب عينة، الأشعة تروح تصوّر بجهاز متنقل، أو تجهيز جهاز أو تخت.',mod:'الجدولة',data:'Order (LAB | IMAGING | EQUIPMENT)'},
+ t_dispatch:{t:'task',k:'core',l:L,r:11,ar:'وحدة التوصيل',sub:'كادر / مختبر / جهاز',actor:'وحدة التوصيل',what:'تجهيز المسار والسيارة والمعدات وتوصيل الدكتور أو الممرض أو فني المختبر أو الجهاز لبيت المريض، والمريض بتتبّع الوصول.',mod:'التوصيل والتتبع',data:'status → DISPATCHED'},
+ gw_home:{t:'gw',l:L,r:12,ar:'المريض موجود؟',actor:'الكادر الميداني',what:'هل المريض بالبيت عند الوصول؟',mod:'تطبيق الكادر',data:''},
+ end_noshow:{t:'end',k:'exc',l:C,r:12,ar:'No-show',actor:'المنسق',what:'تسجيل No-show، إعادة جدولة، ورسوم حسب السياسة.',mod:'الجدولة',data:'status → NO_SHOW'},
+ t_checkin:{t:'task',k:'core',l:L,r:13,ar:'تسجيل الوصول',sub:'GPS / OTP',actor:'الكادر الميداني',what:'تأكيد الوصول بالموقع أو برمز OTP بوصل للمريض.',mod:'تطبيق الكادر',data:'Visit.checkInAt, geo'},
+ gw_type:{t:'gw',l:L,r:14,ar:'نوع الخدمة؟',actor:'النظام',what:'خدمة خارجية (Outpatient) بتتنفذ وبتنتهي، أو رعاية منزلية بتبدأ بتقييم وبتستمر.',mod:'—',data:''},
+ t_exec:{t:'task',k:'out',l:D,r:15,ar:'تنفيذ الخدمة',sub:'عينة · تصوير · تركيب',actor:'فني مختبر / أشعة / أجهزة',what:'عينة بباركود وسلسلة تبريد، أو تصوير ورفع الصور للـ PACS، أو تركيب جهاز وتدريب العائلة ونموذج استلام موقّع وعقد إيجار بتاريخ إرجاع.',mod:'تطبيق الكادر',data:'Sample, ImagingStudy, Rental'},
+ t_pay:{t:'task',k:'fin',l:F,r:16,ar:'تحصيل الدفع',sub:'كاش / بطاقة / رابط',actor:'الكادر أو المالية',what:'المريض بدفع حصته عند تنفيذ الخدمة.',mod:'المدفوعات',data:'Payment'},
+ t_results:{t:'task',k:'out',l:D,r:17,ar:'اعتماد وإرفاق النتائج',sub:'ملف المريض + إشعار',actor:'Pathologist / Radiologist',what:'اعتماد النتيجة أو التقرير وإرفاقه بملف المريض وإشعاره. النتيجة الحرجة بتتبلّغ للطبيب فوراً.',mod:'النتائج',data:'Result → Patient file'},
+ end_outp:{t:'end',k:'out',l:D,r:18,ar:'إغلاق الطلب',actor:'النظام',what:'الطلب بيتسكّر.',mod:'—',data:'status → COMPLETED'},
+ t_assess:{t:'task',k:'home',l:CL,r:15,ar:'تقييم الحالة',sub:'زيارة طبيب / ممرض',actor:'الطبيب أو الممرض',what:'التاريخ المرضي، العلامات الحيوية، تقييمات الخطورة (Fall risk و Braden).',mod:'EMR',data:'Assessment, VitalSigns'},
+ t_episode:{t:'task',k:'home',l:CL,r:16,ar:'فتح ملف طبي',sub:'Episode of Care + EMR',actor:'الطبيب أو الممرض',what:'فتح Episode of Care وإدخال كل البيانات الطبية: تشخيص، حساسية، أدوية، أمراض مزمنة.',mod:'EMR',data:'Episode, Diagnosis, Allergy, Medication'},
+ gw_suitable:{t:'gw',l:CL,r:17,ar:'مناسبة للبيت؟',actor:'الطبيب',what:'إذا الحالة مش مناسبة للرعاية المنزلية بتتحوّل لمستشفى أو عيادة.',mod:'EMR',data:''},
+ end_refer:{t:'end',k:'exc',l:L,r:17,ar:'تحويل لمستشفى',actor:'الطبيب',what:'تحويل خارجي وإغلاق الـ Episode بسبب.',mod:'EMR',data:'Episode → REFERRED'},
+ t_careplan:{t:'task',k:'home',l:CL,r:18,ar:'خطة رعاية + أوردرات',sub:'ساعات · شفتات · مدة',actor:'الطبيب',what:'خطة الرعاية (عدد الساعات، نوع الشفت، المدة) وأوردرات للمختبر والأشعة والصيدلية والأجهزة.',mod:'EMR · الأوردرات',data:'CarePlan, Order[]'},
+ t_dept_exec:{t:'task',k:'out',l:D,r:19,ar:'الأقسام تنفّذ الأوردرات',sub:'مختبر · أشعة · صيدلية · أجهزة',actor:'الأقسام',what:'كل أوردر بظهر بقائمة عمل القسم المعني، وبيتنفذ بنفس مسار الخدمة الخارجية، والنتيجة بترجع للـ EMR.',mod:'قوائم عمل الأقسام',data:'Order.status, Result'},
+ t_review:{t:'task',k:'home',l:CL,r:20,ar:'مراجعة النتائج',sub:'الطبيب على الـ EMR',actor:'الطبيب',what:'يراجع النتائج ويعدّل الخطة أو الأوردرات إذا لزم.',mod:'EMR',data:'Result.reviewedBy'},
+ t_roster:{t:'task',k:'core',l:C,r:21,ar:'جدولة الشفتات',sub:'8 / 12 / 24 ساعة',actor:'المنسق',what:'يبني جدول الشفتات ويوزّع الممرضين حسب المهارة والمنطقة والاستمرارية، وينشره على تطبيق الممرض.',mod:'الشفتات',data:'Shift[], Roster'},
+ t_shift:{t:'task',k:'home',l:CL,r:22,ar:'تنفيذ الشفت',sub:'حضور · رعاية · ملاحظات',actor:'الممرض',what:'Check-in بالموقع، علامات حيوية، إعطاء أدوية (MAR)، إجراءات، ملاحظات ومستجدات، تسليم للممرض اللي بعده، ثم Check-out.',mod:'تطبيق الممرض',data:'Attendance, VitalSigns, MAR, ShiftNote'},
+ tm_late:{t:'timer',host:'t_shift',ar:'15 د',actor:'النظام',what:'إذا الممرض ما سجّل حضور خلال 15 دقيقة من بداية الشفت، بوصل تنبيه للمنسق.',mod:'الشفتات',data:'Shift → MISSED'},
+ cd_news:{t:'cond',host:'t_shift',ar:'NEWS2',actor:'النظام',what:'كل إدخال علامات حيوية بنحسب NEWS2 تلقائياً. 0–4 روتيني، 5–6 إعادة قياس بعد 15 دقيقة ثم الطبيب المناوب، 7+ إسعاف وإبلاغ الطبيب والعائلة.',mod:'التصعيد',data:'Escalation'},
+ t_backup:{t:'task',k:'exc',l:C,r:23,ar:'ممرض بديل',sub:'Backup pool',actor:'المنسق',what:'تنبيه المنسق وإرسال ممرض بديل من الاحتياط.',mod:'الشفتات',data:'Shift.reassign'},
+ t_invoice:{t:'task',k:'fin',l:F,r:23,ar:'فاتورة دورية',sub:'أسبوعي / شهري',actor:'المالية',what:'تجميع الساعات الفعلية من الحضور والزيارات والمستهلكات وأيام الإيجار حسب عقد المريض، ومطابقتها مع سجل الحضور قبل الإصدار. مع تأمين بتنقسم لـ Claim وحصة مريض.',mod:'الفوترة',data:'Invoice, InvoiceLine, Claim'},
+ gw_end:{t:'gw',l:CL,r:24,ar:'انتهت الرعاية؟',actor:'الطبيب',what:'إذا الرعاية مستمرة بنكمّل شفتات ودورة فوترة جديدة.',mod:'EMR',data:''},
+ t_discharge:{t:'task',k:'home',l:CL,r:25,ar:'إنهاء الخدمة',sub:'ملخص خروج + استرجاع أجهزة',actor:'الطبيب + وحدة التوصيل',what:'ملخص خروج يوقّعه الطبيب، واسترجاع الأجهزة وفحص حالتها.',mod:'EMR · الأجهزة',data:'Episode → DISCHARGED'},
+ t_final:{t:'task',k:'fin',l:F,r:26,ar:'فاتورة نهائية',sub:'+ استبيان رضا',actor:'المالية',what:'فاتورة نهائية وإغلاق الحساب، وإرسال استبيان رضا للمريض.',mod:'الفوترة',data:'Invoice (final), Survey'},
+ end_final:{t:'end',k:'core',l:F,r:27,ar:'إغلاق الحساب',actor:'النظام',what:'الـ Episode والحساب مغلقين.',mod:'—',data:''}
+};
+
+const TW=140, THt=54, GH=24, ER=15;
+function box(n){
+  const x=X(n.l), y=Y(n.r);
+  if(n.t==='task') return {x,y,hw:TW/2,hh:THt/2};
+  if(n.t==='gw') return {x,y,hw:GH,hh:GH};
+  return {x,y,hw:ER,hh:ER};
+}
+function pt(id,side){const b=box(N[id]);return side==='top'?[b.x,b.y-b.hh]:side==='bottom'?[b.x,b.y+b.hh]:side==='left'?[b.x-b.hw,b.y]:[b.x+b.hw,b.y];}
+function facing(a,b){return box(N[b]).x<box(N[a]).x?'left':'right';}
+function route(a,b,mode){
+  const A=box(N[a]),B=box(N[b]);
+  if(mode==='v'||A.x===B.x){return B.y>A.y?[pt(a,'bottom'),pt(b,'top')]:[pt(a,'top'),pt(b,'bottom')];}
+  if(mode==='h'){return [pt(a,facing(a,b)),pt(b,facing(b,a))];}
+  if(mode==='vh'){const s=pt(a,'bottom'),e=pt(b,facing(b,a));return [s,[s[0],e[1]],e];}
+  const s=pt(a,facing(a,b)),e=B.y>A.y?pt(b,'top'):pt(b,'bottom');return [s,[e[0],s[1]],e];
+}
+const xo=(l,d)=>X(l)+DIR*d; // offset toward higher lanes
+const E=[
+ ['start','gw_channel','v'],
+ ['gw_channel','t_app','v','تطبيق'],
+ ['gw_channel','t_call','hv','اتصال'],
+ ['t_app','t_lookup','vh'],
+ ['t_call','t_lookup','v'],
+ ['t_lookup','gw_complete','v'],
+ ['gw_complete','t_missing','h','لا'],
+ ['t_missing','t_lookup',()=>{const s=pt('t_missing','top'),e=pt('t_lookup',facing('t_lookup','t_missing'));return [s,[s[0],e[1]],e];}],
+ ['gw_complete','t_price','hv','نعم'],
+ ['t_price','t_quote','v'],
+ ['t_quote','gw_accept','hv'],
+ ['gw_accept','end_cancel','v','لا'],
+ ['gw_accept','gw_route','hv','نعم'],
+ ['gw_route','t_assign_clin','hv','تقييم / ممرض'],
+ ['gw_route','t_assign_dept','vh','خدمة مباشرة'],
+ ['t_assign_clin','t_dispatch','vh'],
+ ['t_assign_dept','t_dispatch','vh'],
+ ['t_dispatch','gw_home','v'],
+ ['gw_home','end_noshow','h','لا'],
+ ['gw_home','t_checkin','v','نعم'],
+ ['t_checkin','gw_type','v'],
+ ['gw_type','t_assess','hv','رعاية منزلية'],
+ ['gw_type','t_exec',()=>{const s=pt('gw_type','bottom'),e=pt('t_exec','top'),my=Y(14)+RH*0.5;return [s,[s[0],my],[e[0],my],e];},'خدمة خارجية'],
+ ['t_exec','t_pay','vh'],
+ ['t_pay','t_results','vh'],
+ ['t_results','end_outp','v'],
+ ['t_assess','t_episode','v'],
+ ['t_episode','gw_suitable','v'],
+ ['gw_suitable','end_refer','h','لا'],
+ ['gw_suitable','t_careplan','v','نعم'],
+ ['t_careplan','t_dept_exec','vh','أوردرات'],
+ ['t_dept_exec','t_review','vh','نتائج'],
+ ['t_review','t_roster','vh'],
+ ['t_roster','t_shift','vh'],
+ ['t_shift','t_invoice','hv','Check-out'],
+ ['tm_late','t_backup',()=>{const b=tmPos('tm_late');const e=pt('t_backup',facing('t_backup','t_shift'));return [[b[0],b[1]+11],[b[0],e[1]],e];},'بدون حضور'],
+ ['t_backup','t_shift',()=>{const s=pt('t_backup','top'),y=Y(22);return [s,[s[0],y],[X(CL)-DIR*TW/2,y]];}],
+ ['t_invoice','gw_end',()=>{const s=pt('t_invoice','bottom'),e=pt('gw_end','top'),my=Y(23)+RH*0.5;return [s,[s[0],my],[e[0],my],e];}],
+ ['gw_end','t_shift',()=>{const s=pt('gw_end',DIR<0?'left':'right'),x=xo(CL,48),e=[x,Y(22)+THt/2];return [s,[x,s[1]],e];},'لا، دورة جديدة'],
+ ['gw_end','t_discharge','v','نعم'],
+ ['t_discharge','t_final','vh'],
+ ['t_final','end_final','v']
+];
+function tmPos(id){const n=N[id],b=box(N[n.host]);return id==='tm_late'?[b.x-DIR*(-1)*-40,b.y+b.hh]:[b.x+DIR*-1*-50,b.y-b.hh];}
+
+const S=[];const ns='http://www.w3.org/2000/svg';
+S.push(`<svg xmlns="${ns}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="مخطط BPMN لعملية الرعاية المنزلية">`);
+S.push(`<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0 0L10 5L0 10z"/></marker></defs>`);
+// phase bands
+phases.forEach((p,i)=>{const y0=Y(p.a)-RH/2,y1=Y(p.b)+RH/2;
+  S.push(`<rect x="0" y="${y0}" width="${W}" height="${y1-y0}" fill="var(${i%2?'--band-b':'--band-a'})"/>`);
+  S.push(`<line x1="0" x2="${W}" y1="${y0}" y2="${y0}" stroke="var(--grid)"/>`);
+  const cx=W-PW/2, cy=(y0+y1)/2;
+  S.push(`<text x="${cx}" y="${cy}" transform="rotate(90 ${cx} ${cy})" text-anchor="middle" dominant-baseline="middle" style="font-family:var(--f-display);font-weight:600;font-size:14px;fill:var(--accent)">${p.ar}</text>`);
+  S.push(`<text x="${W-PW+12}" y="${y0+18}" style="font-family:var(--f-mono);font-size:11px;fill:var(--muted)">0${i+1}</text>`);
+});
+// lane header + separators
+S.push(`<rect x="0" y="0" width="${W}" height="${TH}" fill="var(--surface)"/>`);
+S.push(`<line x1="0" x2="${W}" y1="${TH}" y2="${TH}" stroke="var(--line)" stroke-width="1.2"/>`);
+lanes.forEach((ln,i)=>{const x=X(i);
+  S.push(`<text x="${x}" y="${TH/2-4}" text-anchor="middle" style="font-family:var(--f-display);font-weight:600;font-size:14px;fill:var(--fg)">${ln.ar}</text>`);
+  S.push(`<text x="${x}" y="${TH/2+15}" text-anchor="middle" style="font-family:var(--f-mono);font-size:10px;fill:var(--muted)">${ln.en}</text>`);
+  S.push(`<line x1="${x-LW/2}" x2="${x-LW/2}" y1="0" y2="${H}" stroke="var(--grid)"/>`);
+});
+S.push(`<line x1="${W-PW}" x2="${W-PW}" y1="0" y2="${H}" stroke="var(--line)" stroke-width="1.2"/>`);
+S.push(`<text x="${W-PW/2}" y="${TH/2+4}" text-anchor="middle" style="font-family:var(--f-mono);font-size:10.5px;fill:var(--muted)">PHASE</text>`);
+S.push(`<rect x=".5" y=".5" width="${W-1}" height="${H-1}" fill="none" stroke="var(--line)" stroke-width="1.2"/>`);
+
+// edges
+const labels=[];
+E.forEach(([a,b,m,lbl])=>{
+  const pts=typeof m==='function'?m():route(a,b,m);
+  S.push(`<path class="flow" marker-end="url(#ah)" d="M${pts.map(p=>p.join(' ')).join(' L')}"/>`);
+  if(lbl){const [p0,p1]=pts;let lx,ly;
+    if(p0[1]===p1[1]){const dir=Math.sign(p1[0]-p0[0]);lx=p0[0]+dir*Math.min(46,Math.abs(p1[0]-p0[0])/2);ly=p0[1]-7;}
+    else{lx=p0[0]-26;ly=p0[1]+16;}
+    labels.push(`<text class="e-lbl" x="${lx}" y="${ly}" text-anchor="middle">${lbl}</text>`);}
+});
+// annotation for escalation
+{const b=box(N.t_shift);const ax=X(D),ay=Y(21);
+ const c=tmPos('cd_news');
+ S.push(`<path class="assoc" d="M${c[0]} ${c[1]-11} L${c[0]} ${ay} L${ax+70} ${ay}"/>`);
+ S.push(`<path d="M${ax+70} ${ay-26} h-8 v52 h8" fill="none" stroke="var(--line)" stroke-width="1.3"/>`);
+ labels.push(`<text class="g-lbl" x="${ax-2}" y="${ay-8}" text-anchor="middle" style="font-weight:600">التصعيد: NEWS2 ≥ 5</text>`);
+ labels.push(`<text class="e-lbl" x="${ax-2}" y="${ay+10}" text-anchor="middle">طبيب مناوب ≤ 15 د ← مدير طبي</text>`);
+}
+const kc={core:['--core-fill','--core-stroke','--fg'],out:['--out-fill','--out-stroke','--out-ink'],home:['--home-fill','--home-stroke','--home-ink'],fin:['--fin-fill','--fin-stroke','--fin-ink'],exc:['--exc-fill','--exc-stroke','--exc-ink']};
+Object.entries(N).forEach(([id,n])=>{
+  const g=[];
+  if(n.t==='task'){const b=box(n),c=kc[n.k];
+    g.push(`<rect class="shape" x="${b.x-b.hw}" y="${b.y-b.hh}" width="${TW}" height="${THt}" rx="9" fill="var(${c[0]})" stroke="var(${c[1]})" stroke-width="1.5"/>`);
+    g.push(`<text class="t-title" x="${b.x}" y="${b.y-5}" text-anchor="middle" fill="var(${c[2]})">${n.ar}</text>`);
+    g.push(`<text class="t-sub" x="${b.x}" y="${b.y+13}" text-anchor="middle" fill="var(--muted)">${n.sub}</text>`);
+  }else if(n.t==='gw'){const b=box(n);
+    g.push(`<path class="shape" d="M${b.x} ${b.y-GH}L${b.x+GH} ${b.y}L${b.x} ${b.y+GH}L${b.x-GH} ${b.y}Z" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>`);
+    g.push(`<path d="M${b.x-8} ${b.y-8}l16 16M${b.x+8} ${b.y-8}l-16 16" stroke="var(--fg)" stroke-width="1.8"/>`);
+    labels.push(`<text class="g-lbl" x="${b.x+DIR*-1*0+ (DIR<0?-58:58)}" y="${b.y-30}" text-anchor="middle">${n.ar}</text>`);
+  }else if(n.t==='start'||n.t==='end'){const b=box(n);const end=n.t==='end';const c=end&&n.k?kc[n.k]:null;
+    g.push(`<circle class="shape" cx="${b.x}" cy="${b.y}" r="${ER}" fill="var(${c?c[0]:'--surface'})" stroke="var(${end?(c?c[1]:'--fg'):'--line'})" stroke-width="${end?3.4:1.6}"/>`);
+    labels.push(end?`<text class="g-lbl" x="${b.x}" y="${b.y+32}" text-anchor="middle">${n.ar}</text>`:`<text class="g-lbl" x="${b.x+(DIR<0?-56:56)}" y="${b.y+4}" text-anchor="middle">${n.ar}</text>`);
+  }else{ // boundary events
+    const [x,y]=tmPos(id);
+    g.push(`<circle class="shape" cx="${x}" cy="${y}" r="11" fill="var(--surface)" stroke="var(--line)" stroke-width="1.3"/><circle cx="${x}" cy="${y}" r="8" fill="none" stroke="var(--line)" stroke-width="1.1"/>`);
+    if(n.t==='timer') g.push(`<path d="M${x} ${y-5}V${y}h3.6" stroke="var(--fg)" stroke-width="1.3" fill="none"/>`);
+    else g.push(`<path d="M${x-3.5} ${y-4}h7M${x-3.5} ${y}h7M${x-3.5} ${y+4}h7" stroke="var(--fg)" stroke-width="1.2"/>`);
+    labels.push(`<text class="e-lbl" x="${x+(n.t==='timer'?-22:24)}" y="${y+(n.t==='timer'?18:-12)}" text-anchor="middle" style="fill:var(--fg)">${n.ar}</text>`);
+  }
+  S.push(`<g class="node" data-id="${id}" tabindex="0" role="button" aria-label="${n.ar}">${g.join('')}</g>`);
+});
+S.push(labels.join(''));
+S.push('</svg>');
+const host=document.getElementById('diagram');host.innerHTML=S.join('');
+
+const $=id=>document.getElementById(id);
+function select(id){const n=N[id];if(!n)return;
+  host.querySelectorAll('.node.sel').forEach(e=>e.classList.remove('sel'));
+  const el=host.querySelector(`[data-id="${id}"]`);el&&el.classList.add('sel');
+  $('d-title').textContent=n.ar+(n.sub?' · '+n.sub:'');
+  $('d-actor').textContent='المسؤول: '+n.actor;
+  $('d-what').textContent=n.what;
+  $('d-mod').textContent=n.mod;
+  $('d-data').textContent=n.data?('البيانات: '+n.data):'';
+}
+host.addEventListener('click',e=>{const g=e.target.closest('.node');g&&select(g.dataset.id);});
+host.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.classList.contains('node')){e.preventDefault();select(e.target.dataset.id);}});
+select('gw_route');
+})();
+</script>
