@@ -17,6 +17,26 @@ export class Db {
     this.raw = new DatabaseSync(path);
     this.raw.exec('PRAGMA foreign_keys = ON;');
     this.raw.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
+    this.migrate();
+  }
+
+  /** Columns added to existing tables after the first release. Idempotent: only adds what is missing. */
+  private migrate() {
+    const add = (table: string, column: string, ddl: string) => {
+      const cols = this.raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some((c) => c.name === column)) this.raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    };
+    // BR-12 quote validity.
+    add('quotes', 'valid_until', 'TEXT');
+    // §5.5 escalation timers.
+    add('escalations', 'due_at', 'TEXT');
+    add('escalations', 'escalated_at', 'TEXT');
+    add('escalations', 'escalated_to', 'TEXT');
+    add('escalations', 'recheck_requested_at', 'TEXT');
+    add('results', 'escalated_at', 'TEXT');
+    // BR-23 cancellation fee and BR-24 no-show tracking on the visit.
+    add('visits', 'cancelled_at', 'TEXT');
+    add('visits', 'cancel_fee', 'INTEGER');
   }
 
   get<T = Row>(sql: string, ...params: SQLInputValue[]): T | undefined {

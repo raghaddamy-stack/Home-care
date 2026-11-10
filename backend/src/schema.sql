@@ -360,3 +360,29 @@ CREATE TABLE IF NOT EXISTS visit_feedback (
   closed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- BR-80 / BR-03: consent signed by the patient or a guardian before the first visit.
+CREATE TABLE IF NOT EXISTS consents (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  type TEXT NOT NULL,                         -- domain/consent.ts CONSENT_TYPES
+  signed_by TEXT NOT NULL,                    -- name of the person who signed
+  relation TEXT NOT NULL DEFAULT 'SELF',      -- SELF or the guardian's relation
+  method TEXT NOT NULL,                       -- APP | OTP | ESIGN | PAPER
+  recorded_by INTEGER REFERENCES staff(id),   -- NULL when signed in the patient app
+  signed_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT
+);
+
+-- BR-24 / BR-15: money collected before the visit; applied to the visit invoice on completion.
+CREATE TABLE IF NOT EXISTS prepayments (
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES service_requests(id),
+  method TEXT NOT NULL CHECK (method IN ('CASH','CARD','LINK','TRANSFER','CLIQ')),
+  amount INTEGER NOT NULL,
+  reference TEXT,
+  collected_by INTEGER REFERENCES staff(id),
+  applied_invoice_id INTEGER REFERENCES invoices(id),
+  at TEXT NOT NULL
+);

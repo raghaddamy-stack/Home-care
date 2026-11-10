@@ -8,6 +8,8 @@ import { seed } from '../src/seed.js';
 // Seeded staff ids
 const AGENT = 2, COORD = 3, DOCTOR = 4, RANA = 5, HADI = 6, MAYA = 7, LAB = 8, DRIVER = 10, FINANCE = 11, SUPERVISOR = 12;
 const HOME = { lat: 31.9539, lng: 35.9106 };
+// BR-80: general consent signed on the staff device at the first visit.
+const CONSENT = { signedBy: 'Ahmad Saleh', relation: 'SELF', method: 'ESIGN' };
 
 const patient = {
   nationalId: '9851234567', fullName: 'Ahmad Saleh', dob: '1948-03-02', gender: 'M' as const, phone: '0790000000',
@@ -74,7 +76,7 @@ describe('outpatient path (lab at home)', () => {
     expect((await post(`/api/visits/${visitId}/dispatch`, {}, LAB)).body.status).toBe('DISPATCHED');
     const far = await post(`/api/visits/${visitId}/check-in`, { lat: 32.05, lng: 35.9 }, LAB);
     expect(far.status).toBe(400);
-    expect((await post(`/api/visits/${visitId}/check-in`, { lat: HOME.lat + 0.0005, lng: HOME.lng }, LAB)).body.method).toBe('GPS');
+    expect((await post(`/api/visits/${visitId}/check-in`, { lat: HOME.lat + 0.0005, lng: HOME.lng, consent: CONSENT }, LAB)).body.method).toBe('GPS');
 
     const done = await post(`/api/visits/${visitId}/complete`, { result: { report: 'CBC normal; HbA1c 6.1%' }, payment: { method: 'CASH', amount: 20_000 } }, LAB);
     expect(done.status).toBe(200);
@@ -119,7 +121,7 @@ describe('home care path', () => {
     const { body: s } = await post(`/api/requests/${r.id}/schedule`, { route: 'ASSESSMENT', staffId: DOCTOR, scheduledAt: '2026-11-01T09:00:00Z' }, COORD);
     await post(`/api/visits/${s.visitId}/dispatch`, {}, DOCTOR);
     const otp = db.get('SELECT otp FROM visits WHERE id = ?', s.visitId)!.otp;
-    await post(`/api/visits/${s.visitId}/check-in`, { otp }, DOCTOR);
+    await post(`/api/visits/${s.visitId}/check-in`, { otp, consent: CONSENT }, DOCTOR, '2026-11-01T09:05:00Z');
     const ep = await post('/api/episodes', { requestId: r.id, diagnosis: 'Post-stroke care', suitable: true, bradenScore: 14, fallRiskScore: 55, allergies: ['Penicillin'] }, DOCTOR);
     expect(ep.status).toBe(201);
     return { requestId: r.id, episodeId: ep.body.id as number, patientId: r.patient_id as number };
@@ -131,7 +133,7 @@ describe('home care path', () => {
     await post(`/api/requests/${r.id}/accept`, {}, COORD);
     const { body: s } = await post(`/api/requests/${r.id}/schedule`, { route: 'ASSESSMENT', staffId: RANA, scheduledAt: '2026-11-01T09:00:00Z' }, COORD);
     await post(`/api/visits/${s.visitId}/dispatch`, {}, RANA);
-    await post(`/api/visits/${s.visitId}/check-in`, HOME, RANA);
+    await post(`/api/visits/${s.visitId}/check-in`, { ...HOME, consent: CONSENT }, RANA);
     const ep = await post('/api/episodes', { requestId: r.id, diagnosis: 'Unstable angina', suitable: false, referReason: 'Needs cardiac monitoring' }, RANA);
     expect(ep.body.status).toBe('REFERRED_OUT');
     expect(db.get('SELECT status FROM service_requests WHERE id = ?', r.id)!.status).toBe('REFERRED_OUT');

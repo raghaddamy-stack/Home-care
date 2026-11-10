@@ -38,7 +38,7 @@ async function completedLabVisit() {
   const s = await post(`/api/requests/${body.id}/schedule`, { route: 'DIRECT', staffId: LAB, scheduledAt: new Date().toISOString() }, COORD);
   const otp = db.get('SELECT otp FROM visits WHERE id = ?', s.body.visitId)!.otp;
   await post(`/api/visits/${s.body.visitId}/dispatch`, {}, LAB);
-  await post(`/api/visits/${s.body.visitId}/check-in`, { otp }, LAB);
+  await post(`/api/visits/${s.body.visitId}/check-in`, { otp, consent: { signedBy: 'Patient', relation: 'SELF', method: 'ESIGN' } }, LAB);
   const done = await post(`/api/visits/${s.body.visitId}/complete`, { result: { report: 'normal' } }, LAB);
   expect(done.body.status).toBe('COMPLETED');
   return body.id as number;

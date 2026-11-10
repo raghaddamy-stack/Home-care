@@ -4,7 +4,7 @@
 
 | Item | Value |
 |---|---|
-| Version | 0.1 (draft for client review) |
+| Version | 0.2 (draft for client review). 0.2 clarifies BR-12, BR-23, BR-24, BR-33, BR-80 and the §5.5 timers as built; see `docs/ba-gap-analysis.md` |
 | Date | 2026-11-10 |
 | Market | Jordan first, GCC-ready (KSA, UAE) |
 | Scope | Intake, coordination, scheduling and dispatch, outpatient home services (lab, imaging, devices), home-care episodes (nursing and doctor), escalation, billing and insurance, discharge |
@@ -128,7 +128,8 @@ Legend: **C** create · **R** read · **U** update · **A** approve/validate · 
 | **Invoice / InvoiceLine** الفاتورة | invoice_no, patient_id, payer_id, episode_id/request_id, period_from/to, type (patient, payer claim, final), lines[] (source_type: visit, shift, rental, supply, order; source_id; qty; unit_price; payer_amount; patient_amount; tax), totals, status, due_date | Every line must link to a source record. |
 | **Payment** الدفعة | payment_id, invoice_id, method (cash, card on device, payment link, bank transfer, CliQ), amount, reference, collected_by, received_at, reconciled | |
 | **Claim** المطالبة | claim_no, payer_id, invoice_ids[], preapproval_no, submitted_at, amount_claimed, amount_approved, rejection_codes[], resubmission_count, status | |
-| **Consent** الموافقة **[Proposed]** | id, patient_id, type (treatment, data sharing, photo, guardian access, telemonitoring), signed_by, relation, method (e-sign, OTP, paper scan), signed_at, expires_at, revoked_at | |
+| **Consent** الموافقة | id, patient_id, type (treatment, invasive procedure, imaging, data sharing, photo, guardian access, telemonitoring), signed_by, relation, method (app, OTP, e-sign, paper scan), recorded_by, signed_at, expires_at, revoked_at | Never deleted; revoking sets `revoked_at` |
+| **Prepayment** الدفعة المسبقة | id, request_id, method, amount, reference, collected_by, at, applied_invoice_id | Money taken before a visit (BR-15, BR-24); applied to the visit invoice on completion |
 | **Notification** الإشعار | id, recipient, channel (SMS, push, WhatsApp, email, call), template_id, language, payload, sent_at, delivered_at, read_at, status | |
 | **AuditLog** سجل التدقيق | id, actor_id, role, action, entity, entity_id, before/after (hashed for clinical), ip/device, timestamp, reason (for break-the-glass) | Append-only. |
 
@@ -142,13 +143,15 @@ Legend: **C** create · **R** read · **U** update · **A** approve/validate · 
 Draft → Submitted → UnderReview ─┬→ PendingInfo → UnderReview
                                  ├→ PendingPreApproval → Quoted
                                  └→ Quoted ─┬→ Accepted → Scheduled → InProgress → Completed → Closed
-                                            ├→ Expired (quote validity passed)
+                                            ├→ Expired (quote validity passed) ─┬→ Quoted (new version)
+                                            │                                   └→ Cancelled
                                             └→ Cancelled (reason required)
-Any state before InProgress → Cancelled (reason; fee rules in §5.3)
+Any state before InProgress, including Dispatched (team on the way) → Cancelled (reason; fee rules in §5.3)
 Accepted (care path) → ConvertedToEpisode
 Scheduled → NoShow → Rescheduled → Scheduled
 ```
 Rules: `Closed` needs all results released, payment settled or invoiced, and devices handed over.
+An `Expired` request cannot be accepted; the coordinator re-prices it (new quote version, new validity) or cancels it. Rescheduling replaces the booked visit: the earlier visit is cancelled, not kept.
 
 ### 4.2 Order
 
@@ -215,7 +218,7 @@ Device after return: Cleaning → Maintenance (if due) → Available
 |---|---|---|
 | BR-10 | Price source order: active contract price list, then insurer list, then cash list. Manual price changes need a reason. | — |
 | BR-11 | Discount authority: Coordinator up to 10%. Ops manager up to 25%. Above that, the General Manager. | Approval workflow |
-| BR-12 | Quote valid for | 48 h (same-day services: 4 h) |
+| BR-12 | Quote valid for the period on the right, counted from when it is sent; the patient sees the end time. An acceptance after that time is refused and the request becomes `Expired`; a scheduled sweep also expires open quotes. The coordinator sends a new version with current prices. | 48 h (same-day and urgent requests: 4 h) |
 | BR-13 | Quote acceptance must be recorded through an app click or an SMS OTP. A verbal acceptance taken by an agent must be recorded with the call ID. | — |
 | BR-14 | Pre-approval needed when the policy says so for that service line. If not approved, offer a cash quote or cancel. | Pre-approval SLA: follow up every 4 h |
 | BR-15 | Deposit / prepayment: cash patients pay 100% for direct services, 1 week in advance for shift-based nursing, and a rental deposit (BR-60). | — |
@@ -227,8 +230,8 @@ Device after return: Cleaning → Maintenance (if due) → Available
 | BR-20 | Matching order: required skill/licence, then gender preference, then zone, then continuity (same nurse), then workload, then travel time. | — |
 | BR-21 | If no resource fits the slot, propose the 3 nearest alternative slots. | — |
 | BR-22 | Notify the patient on assignment (staff name, photo, ETA), 24 h before, and on "on the way". | SMS + push |
-| BR-23 | Patient cancellation: free if more than 24 h before. 50% of the visit fee from 24 h to 2 h before. 100% if less than 2 h before or on arrival. | Configurable per contract |
-| BR-24 | Patient no-show (staff arrives, waits 15 min, calls twice, no answer): one no-show fee equal to 50% of the visit fee (minimum 10 JOD). Reschedule offered. The 2nd no-show in 30 days needs prepayment. | — |
+| BR-23 | Patient cancellation: free if more than 24 h before. 50% of the visit fee from 24 h to 2 h before. 100% if less than 2 h before or once the team is on the way (dispatched). No fee when nothing is booked yet or when the company cancels (no staff, outside area, clinical reason). The agent sees the fee before confirming; the fee goes on a draft invoice for Finance. "Visit fee" = the patient's share of the accepted quote **[Client to confirm for insured patients]**. | Configurable per contract |
+| BR-24 | Patient no-show (staff arrives, waits 15 min, calls twice, no answer): one no-show fee equal to 50% of the visit fee (minimum 10 JOD). Reschedule offered. From the 2nd no-show in 30 days, the next booking needs prepayment of the visit fee before staff can be assigned; the prepayment is applied to the visit invoice when the visit is completed. **[Client to confirm]** whether the 10 JOD minimum is capped at the visit price. | — |
 | BR-25 | Staff late or no-show: no fee to the patient. After 2 missed visits the patient gets a service credit. Recorded against the staff KPI. | — |
 | BR-26 | Check-in valid if GPS is within 150 m of the address, or the patient's OTP is entered. Manual check-in needs supervisor approval. | — |
 
@@ -238,7 +241,7 @@ Device after return: Cleaning → Maintenance (if due) → Available
 | BR-30 | Check-in grace period. After it: alert the coordinator, call the nurse, and dispatch a backup if no ETA within 15 min. | 15 min |
 | BR-31 | A shift cannot end without a handover to the next nurse or a patient/guardian sign-off. For 24 h coverage, no gap is allowed. | — |
 | BR-32 | Billable hours = actual attendance, rounded to 15 min. Up to 10 min late is tolerated if the shift is complete. Overtime is billable only if pre-approved. | — |
-| BR-33 | Nurse hour limits: at most 60 h/week, at most 2 consecutive 24 h shifts, at least 11 h rest between shifts **[Proposed]** (check with Jordan labour law). | Hard warning |
+| BR-33 | Nurse hour limits: at most 60 h in any 7 days, at most 2 back-to-back 24 h shifts, at least 11 h rest between shifts **[Proposed]** (check with Jordan labour law: 48 h normal week, the rest is consented overtime). Checked when the roster is built and when a backup nurse is assigned. | Hard warning: blocked unless a nursing supervisor overrides with a reason (audited) |
 | BR-34 | Roster published at least 7 days ahead. Reminders 24 h and 2 h before the shift. | — |
 | BR-35 | Weekly supervisor audit: at least 1 unannounced or remote audit per active episode per week, plus a 10% documentation sample. | — |
 | BR-36 | No assignment if the licence, BLS or required certificate has expired. Alerts at 60/30/7 days before expiry. | Hard stop |
@@ -255,7 +258,8 @@ Device after return: Cleaning → Maintenance (if due) → Available
 - SpO2 **Scale 2** (target 88–92%) only for documented hypercapnic COPD patients. A doctor must set it.
 - NEWS2 is **not valid** for under-16s or pregnancy. Use PEWS or MEOWS, or doctor-defined thresholds **[Proposed]**.
 - Patient has a DNR / limits-of-care order: the escalation path follows the advance directive.
-- Critical lab/imaging result: phone the ordering or on-call doctor within 30 min of validation and record a read-back. If not acknowledged in 30 min, escalate to the medical director. Results are not released to the patient app until the doctor has acknowledged them or 24 h have passed.
+- Critical lab/imaging result (home-care and outpatient): phone the ordering or on-call doctor within 30 min of validation and record a read-back. If not acknowledged in 30 min, escalate to the medical director. A **critical** result is released to the patient app only after a doctor has acknowledged it. A non-critical result is released after doctor review or after 24 h, whichever comes first.
+- Timers run as a scheduled check every minute: each escalation stores its response deadline, and an unanswered escalation past its deadline goes to the next level once (medical director for clinical triggers, nursing supervisor for a late shift). For NEWS2 5–6 the nurse is also reminded to recheck if no new reading arrives within 15 min. NEWS2 ≥7 notifies the medical director at the moment of the reading.
 - Every escalation is documented in the EMR with timestamps. Level ≥7 or a missed SLA needs a medical director review within 72 h.
 
 ### 5.6 Lab, Imaging, Devices
@@ -284,7 +288,7 @@ Device after return: Cleaning → Maintenance (if due) → Available
 ### 5.8 Consent, Privacy and Discharge
 | ID | Rule | Default |
 |---|---|---|
-| BR-80 | General consent to home treatment is signed before the first visit. Specific consent needed for invasive procedures, imaging, photography and sharing data with family. | Hard stop |
+| BR-80 | General consent to home treatment is signed before the first visit. Specific consent needed for invasive procedures, imaging, photography and sharing data with family. Checked at visit and shift check-in (imaging visits also need imaging consent). The patient can sign in the app when accepting the price; otherwise staff capture the signature on their device at the door. A patient under 18 needs a guardian's signature (BR-03). A revoked or expired consent blocks the next visit. | Hard stop |
 | BR-81 | Guardian portal access only after consent from the patient or proof of legal authority. | — |
 | BR-82 | Discharge needs: discharge summary signed by the doctor, medication reconciliation, device pickup scheduled, final invoice, satisfaction survey sent within 24 h. | — |
 | BR-83 | Data retention: clinical records kept at least 10 years (minors: until age 28) **[Proposed — confirm with MoH]**. | — |

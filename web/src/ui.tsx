@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { STATUS_AR } from './api';
 
 const TONE: Record<string, string> = {
-  PENDING_INFO: 'warn', PENDING_PREAPPROVAL: 'warn', NO_SHOW: 'bad', CANCELLED: 'mute', REFERRED_OUT: 'mute',
+  PENDING_INFO: 'warn', PENDING_PREAPPROVAL: 'warn', EXPIRED: 'warn', NO_SHOW: 'bad', CANCELLED: 'mute', REFERRED_OUT: 'mute',
   UNDER_REVIEW: 'info', SUBMITTED: 'info', QUOTED: 'info', ACCEPTED: 'ok', SCHEDULED: 'ok', DISPATCHED: 'ok', IN_PROGRESS: 'ok',
   COMPLETED: 'done', CONVERTED_TO_EPISODE: 'done', LATE: 'bad', MISSED: 'mute', CHECKED_IN: 'ok', PLANNED: 'info',
   ACTIVE: 'ok', ON_HOLD: 'bad', DISCHARGED: 'done', OPEN: 'bad', ACKED: 'warn', RESOLVED: 'done',

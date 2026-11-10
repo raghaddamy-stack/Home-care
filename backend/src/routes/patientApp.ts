@@ -4,7 +4,8 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { HttpError, notify, now, wrap } from '../http.js';
-import { CreateRequest, createServiceRequest, missingInfo, setStatus } from './requests.js';
+import { acceptQuote, cancellationQuote, cancelRequest, CreateRequest, createServiceRequest, missingInfo, setStatus } from './requests.js';
+import { recordConsent } from './consent.js';
 
 const OTP_TTL_MIN = 5;
 const OTP_MAX_ATTEMPTS = 5;
@@ -140,36 +141,38 @@ export function patientAppRoutes(db: Db): Router {
         cancelReason: x.cancel_reason,
         items: db.all(`SELECT i.service_code, i.qty, s.name_ar FROM request_items i JOIN services s ON s.code = i.service_code WHERE request_id = ?`, x.id),
         missing: x.status === 'PENDING_INFO' ? missingInfo(db, x) : [],
-        quote: quote && { version: quote.version, lines: JSON.parse(quote.lines), total: quote.total, payerTotal: quote.payer_total, patientTotal: quote.patient_total, status: quote.status },
+        quote: quote && { version: quote.version, lines: JSON.parse(quote.lines), total: quote.total, payerTotal: quote.payer_total, patientTotal: quote.patient_total, status: quote.status, validUntil: quote.valid_until },
         // The visit code is shown only once a visit is booked; the patient reads it to the staff on arrival.
         visit: visit && { ...visit, otp: ['SCHEDULED', 'DISPATCHED'].includes(visit.status) ? visit.otp : undefined },
       };
     });
   }));
 
+  // Accept the price. With `consentGeneral: true` the patient also signs the general consent to home treatment (BR-80).
   r.post('/me/requests/:id/accept', wrap((req) => {
     const p = patientFromToken(db, req);
+    const body = z.object({ consentGeneral: z.boolean().optional() }).parse(req.body ?? {});
     const request = ownRequest(db, p.id, req.params.id);
-    return db.tx(() => {
-      setStatus(db, request, 'ACCEPTED', undefined, 'Accepted in app');
-      db.run(`UPDATE quotes SET status = 'ACCEPTED', accepted_at = ? WHERE request_id = ? AND status = 'SENT'`, now(req).toISOString(), request.id);
-      notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} accepted in app: schedule it`);
-      return { status: request.status };
-    });
+    const out = acceptQuote(db, request, now(req), undefined, 'Accepted in app');
+    if (body.consentGeneral) recordConsent(db, p, { types: ['GENERAL_TREATMENT'], signedBy: p.full_name, relation: 'SELF', method: 'APP', at: now(req) });
+    notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} accepted in app: schedule it`);
+    return out;
+  }));
+
+  // Cancellation fee preview (BR-23) so the app can warn before the patient confirms.
+  r.get('/me/requests/:id/cancellation-fee', wrap((req) => {
+    const p = patientFromToken(db, req);
+    const { pct, fee, reason } = cancellationQuote(db, ownRequest(db, p.id, req.params.id), now(req), 'PATIENT');
+    return { pct, fee, reason };
   }));
 
   r.post('/me/requests/:id/cancel', wrap((req) => {
     const p = patientFromToken(db, req);
     const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body);
     const request = ownRequest(db, p.id, req.params.id);
-    return db.tx(() => {
-      setStatus(db, request, 'CANCELLED', undefined, `Patient: ${reason}`);
-      db.update('service_requests', request.id, { cancel_reason: reason });
-      db.run(`UPDATE quotes SET status = 'REJECTED' WHERE request_id = ? AND status = 'SENT'`, request.id);
-      db.run(`UPDATE visits SET status = 'CANCELLED' WHERE request_id = ? AND status = 'SCHEDULED'`, request.id);
-      notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} cancelled by patient: ${reason}`);
-      return { status: request.status };
-    });
+    const out = cancelRequest(db, request, { reason, initiatedBy: 'PATIENT', at: now(req) });
+    notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} cancelled by patient: ${reason}`);
+    return out;
   }));
 
   return r;

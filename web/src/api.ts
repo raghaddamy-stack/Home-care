@@ -51,7 +51,7 @@ export const isoToLocal = (d: Date) => {
 
 export const STATUS_AR: Record<string, string> = {
   SUBMITTED: 'جديد', PENDING_INFO: 'بيانات ناقصة', UNDER_REVIEW: 'للمراجعة', PENDING_PREAPPROVAL: 'بانتظار التأمين',
-  QUOTED: 'عرض سعر مُرسل', ACCEPTED: 'مقبول', SCHEDULED: 'مجدول', DISPATCHED: 'بالطريق', IN_PROGRESS: 'قيد التنفيذ',
+  QUOTED: 'عرض سعر مُرسل', EXPIRED: 'عرض منتهي', ACCEPTED: 'مقبول', SCHEDULED: 'مجدول', DISPATCHED: 'بالطريق', IN_PROGRESS: 'قيد التنفيذ',
   NO_SHOW: 'No-show', COMPLETED: 'مكتمل', CONVERTED_TO_EPISODE: 'رعاية منزلية', REFERRED_OUT: 'محوّل', CANCELLED: 'ملغي',
   PLANNED: 'مخطط', LATE: 'متأخر', CHECKED_IN: 'حاضر', MISSED: 'فائت', ACTIVE: 'نشط', ON_HOLD: 'معلّق', DISCHARGED: 'منتهي',
   OPEN: 'مفتوح', ACKED: 'تم الرد', RESOLVED: 'مغلق', DRAFT: 'مسودة', ISSUED: 'صادرة', PAID: 'مدفوعة', PARTIALLY_PAID: 'مدفوعة جزئياً',

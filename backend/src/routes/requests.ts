@@ -4,8 +4,11 @@ import { randomInt } from 'node:crypto';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { assertTransition, ROUTES, type RequestStatus, type Route } from '../domain/requestStatus.js';
-import { buildQuote, COORDINATOR_DISCOUNT_LIMIT, type Coverage } from '../domain/pricing.js';
-import { actor, audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
+import { buildQuote, COORDINATOR_DISCOUNT_LIMIT, isQuoteExpired, quoteValidUntil, type Coverage, type Urgency } from '../domain/pricing.js';
+import { cancellationFee, NO_SHOW_PREPAY_THRESHOLD, NO_SHOW_WINDOW_DAYS, prepaymentRequired } from '../domain/patientPolicy.js';
+import { buildInvoiceLines } from '../domain/billing.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
+import { createInvoice } from './visits.js';
 
 const PatientInput = z.object({
   nationalId: z.string().min(5),
@@ -118,6 +121,101 @@ export function assertStaffAvailable(db: Db, staffId: number, roles: string[], a
   return s;
 }
 
+/** The quote the patient can accept right now (latest SENT version). */
+function openQuote(db: Db, requestId: number): Row | undefined {
+  return db.get(`SELECT * FROM quotes WHERE request_id = ? AND status = 'SENT' ORDER BY version DESC LIMIT 1`, requestId);
+}
+
+/**
+ * Record the patient's acceptance (app click, or phone with evidence: BR-13).
+ * BR-12: an expired quote cannot be accepted; the request moves to EXPIRED and must be re-priced.
+ */
+export function acceptQuote(db: Db, request: Row, at: Date, actorId: number | undefined, evidence: string): { status: string } {
+  if (request.status !== 'QUOTED') throw new HttpError(409, `Request is ${request.status}, there is no quote to accept`);
+  const quote = openQuote(db, request.id);
+  if (!quote) throw new HttpError(409, 'No open quote');
+  if (isQuoteExpired(quote.valid_until, at)) {
+    // Saved outside a transaction so the board shows EXPIRED even though the acceptance is refused.
+    setStatus(db, request, 'EXPIRED', actorId, `Quote v${quote.version} expired ${quote.valid_until}`);
+    notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no}: quote expired before acceptance, re-price it`);
+    throw new HttpError(409, 'The quote has expired (BR-12). The coordinator will send an updated price.');
+  }
+  return db.tx(() => {
+    setStatus(db, request, 'ACCEPTED', actorId, evidence);
+    db.update('quotes', quote.id, { status: 'ACCEPTED', accepted_at: at });
+    return { status: request.status };
+  });
+}
+
+/** BR-12 sweep: QUOTED requests whose open quote passed its validity move to EXPIRED. */
+export function expireQuotes(db: Db, at: Date): number[] {
+  const rows = db.all(
+    `SELECT r.*, q.valid_until, q.version FROM service_requests r JOIN quotes q ON q.request_id = r.id AND q.status = 'SENT'
+     WHERE r.status = 'QUOTED' AND q.valid_until IS NOT NULL AND q.valid_until < ?`,
+    at.toISOString(),
+  );
+  return db.tx(() => rows.map((r) => {
+    setStatus(db, r, 'EXPIRED', undefined, `Quote v${r.version} expired ${r.valid_until}`);
+    notify(db, `patient:${r.patient_id}`, 'SMS', `${r.request_no}: your price offer expired. We will send an updated one if you still need the service.`);
+    return r.id as number;
+  }));
+}
+
+/** The booked visit a cancellation would hit (booked or team on the way). */
+function activeVisit(db: Db, requestId: number): Row | undefined {
+  return db.get(`SELECT * FROM visits WHERE request_id = ? AND status IN ('SCHEDULED','DISPATCHED') ORDER BY id DESC LIMIT 1`, requestId);
+}
+
+/** Visit fee used by BR-23 / BR-24 = the patient's share of the accepted quote. */
+export function visitFee(db: Db, requestId: number): number {
+  return db.get<{ p: number }>(`SELECT patient_total AS p FROM quotes WHERE request_id = ? AND status = 'ACCEPTED' ORDER BY version DESC LIMIT 1`, requestId)?.p ?? 0;
+}
+
+export function cancellationQuote(db: Db, request: Row, at: Date, initiatedBy: 'PATIENT' | 'COMPANY') {
+  const v = activeVisit(db, request.id);
+  const fee = cancellationFee({
+    visitFee: visitFee(db, request.id), scheduledAt: v ? new Date(v.scheduled_at) : null, cancelAt: at, initiatedBy, dispatched: v?.status === 'DISPATCHED',
+  });
+  return { visitId: v?.id as number | undefined, staffId: v?.staff_id as number | undefined, pct: fee.pct, fee: fee.fee, reason: fee.reason };
+}
+
+/** Cancel with a reason. BR-23: a late patient cancellation puts the fee on a draft invoice. */
+export function cancelRequest(db: Db, request: Row, opts: { reason: string; initiatedBy: 'PATIENT' | 'COMPANY'; at: Date; actorId?: number }) {
+  return db.tx(() => {
+    const fee = cancellationQuote(db, request, opts.at, opts.initiatedBy);
+    setStatus(db, request, 'CANCELLED', opts.actorId, `${opts.initiatedBy === 'PATIENT' ? 'Patient' : 'Company'}: ${opts.reason}`);
+    db.update('service_requests', request.id, { cancel_reason: opts.reason });
+    db.run(`UPDATE quotes SET status = 'REJECTED' WHERE request_id = ? AND status = 'SENT'`, request.id);
+    let invoiceId: number | undefined;
+    if (fee.visitId) {
+      db.update('visits', fee.visitId, { status: 'CANCELLED', cancelled_at: opts.at, cancel_fee: fee.fee });
+      notify(db, `staff:${fee.staffId}`, 'PUSH', `${request.request_no} cancelled: ${opts.reason}`);
+      if (fee.fee > 0) {
+        invoiceId = createInvoice(db, { patient_id: request.patient_id, kind: 'VISIT', request_id: request.id }, buildInvoiceLines(
+          [{ sourceType: 'VISIT', sourceId: fee.visitId, description: `Cancellation fee ${fee.pct}% (${fee.reason})`, qty: 1, unitPrice: fee.fee }], null));
+      }
+    }
+    audit(db, opts.actorId, 'CANCEL', 'service_requests', request.id, { initiatedBy: opts.initiatedBy, fee: fee.fee, pct: fee.pct });
+    return { status: request.status, fee: fee.fee, feePct: fee.pct, feeReason: fee.reason, invoiceId };
+  });
+}
+
+/** BR-24: scheduled times of the patient's missed visits. */
+export function noShowDates(db: Db, patientId: number): Date[] {
+  return db.all<{ at: string }>(
+    `SELECT v.scheduled_at AS at FROM visits v JOIN service_requests r ON r.id = v.request_id WHERE r.patient_id = ? AND v.status = 'NO_SHOW'`,
+    patientId,
+  ).map((x) => new Date(x.at));
+}
+
+/** BR-24 prepayment position of a request: whether it is required, the amount due and what was collected. */
+export function prepaymentStatus(db: Db, request: Row, at: Date) {
+  const required = prepaymentRequired(noShowDates(db, request.patient_id), at);
+  const due = visitFee(db, request.id);
+  const paid = db.get<{ s: number | null }>('SELECT SUM(amount) AS s FROM prepayments WHERE request_id = ?', request.id)!.s ?? 0;
+  return { required, due, paid, outstanding: required ? Math.max(0, due - paid) : 0 };
+}
+
 /** Shared by call-center intake and the patient app: find/create the patient file, then the request. */
 export function createServiceRequest(db: Db, body: z.infer<typeof CreateRequest>, staffId?: number) {
   const staff = staffId ? { id: staffId } : undefined;
@@ -195,8 +293,15 @@ export function requestRoutes(db: Db): Router {
       quotes: db.all('SELECT * FROM quotes WHERE request_id = ? ORDER BY version', request.id).map((q) => ({ ...q, lines: JSON.parse(q.lines) })),
       visits: db.all('SELECT * FROM visits WHERE request_id = ?', request.id),
       history: db.all('SELECT * FROM request_history WHERE request_id = ? ORDER BY id', request.id),
+      prepayment: prepaymentStatus(db, request, now(req)),
+      prepayments: db.all('SELECT * FROM prepayments WHERE request_id = ? ORDER BY id', request.id),
+      // What a patient cancellation would cost right now (BR-23), so the agent can tell the patient first.
+      cancellation: cancellationQuote(db, request, now(req), 'PATIENT'),
     };
   }));
+
+  // BR-12 sweep, run by the scheduler every few minutes (like /shifts/check-late).
+  r.post('/expire-quotes', wrap((req) => ({ expired: expireQuotes(db, now(req)) })));
 
   // Call center fills in missing data, then the request returns to review.
   r.post('/:id/complete-info', wrap((req) => {
@@ -258,43 +363,47 @@ export function requestRoutes(db: Db): Router {
         coverage,
       });
 
+      const validUntil = quoteValidUntil(now(req), request.urgency as Urgency);
       setStatus(db, request, 'QUOTED', staff.id, body.preApprovalNo ? `Pre-approval ${body.preApprovalNo}` : undefined);
       db.run(`UPDATE quotes SET status = 'SUPERSEDED' WHERE request_id = ? AND status = 'SENT'`, request.id);
       const version = (db.get<{ v: number }>('SELECT COALESCE(MAX(version),0) AS v FROM quotes WHERE request_id = ?', request.id)!.v) + 1;
       const quoteId = db.insert('quotes', {
         request_id: request.id, version, lines: quote.lines, discount_pct: body.discountPct,
-        total: quote.total, payer_total: quote.payerTotal, patient_total: quote.patientTotal,
+        total: quote.total, payer_total: quote.payerTotal, patient_total: quote.patientTotal, valid_until: validUntil,
       });
       db.update('service_requests', request.id, { coordinator_id: staff.id });
-      notify(db, `patient:${request.patient_id}`, 'SMS', `Quote for ${request.request_no}: you pay ${(quote.patientTotal / 1000).toFixed(3)} JOD`);
+      notify(db, `patient:${request.patient_id}`, 'SMS', `Quote for ${request.request_no}: you pay ${(quote.patientTotal / 1000).toFixed(3)} JOD, valid until ${validUntil.toISOString().slice(0, 16).replace('T', ' ')}`);
       audit(db, staff.id, 'QUOTE', 'service_requests', request.id, { version, discount: body.discountPct });
-      return { id: quoteId, version, ...quote };
+      return { id: quoteId, version, validUntil: validUntil.toISOString(), ...quote };
     });
   }));
 
   // Agent / coordinator records an acceptance given by phone (patients accept in the app via /api/me).
   r.post('/:id/accept', wrap((req) => {
-    requireRole(db, req, 'AGENT', 'COORDINATOR');
+    const staff = requireRole(db, req, 'AGENT', 'COORDINATOR');
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
-    return db.tx(() => {
-      setStatus(db, request, 'ACCEPTED', actor(db, req)?.id, req.body?.evidence ?? 'app');
-      db.run(`UPDATE quotes SET status = 'ACCEPTED', accepted_at = ? WHERE request_id = ? AND status = 'SENT'`, now(req).toISOString(), request.id);
-      notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} accepted: schedule it`);
-      return { status: request.status };
-    });
+    const out = acceptQuote(db, request, now(req), staff.id, req.body?.evidence ?? 'phone');
+    notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no} accepted: schedule it`);
+    return out;
   }));
 
+  // initiatedBy COMPANY (no staff, outside the service area, clinical reason) never carries a fee (BR-23/BR-25).
   r.post('/:id/cancel', wrap((req) => {
-    requireRole(db, req, 'AGENT', 'COORDINATOR');
-    const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body);
+    const staff = requireRole(db, req, 'AGENT', 'COORDINATOR');
+    const body = z.object({ reason: z.string().min(3), initiatedBy: z.enum(['PATIENT', 'COMPANY']).default('PATIENT') }).parse(req.body);
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
-    return db.tx(() => {
-      setStatus(db, request, 'CANCELLED', actor(db, req)?.id, reason);
-      db.update('service_requests', request.id, { cancel_reason: reason });
-      db.run(`UPDATE quotes SET status = 'REJECTED' WHERE request_id = ? AND status = 'SENT'`, request.id);
-      db.run(`UPDATE visits SET status = 'CANCELLED' WHERE request_id = ? AND status = 'SCHEDULED'`, request.id);
-      return { status: request.status };
-    });
+    return cancelRequest(db, request, { reason: body.reason, initiatedBy: body.initiatedBy, at: now(req), actorId: staff.id });
+  }));
+
+  // BR-24 / BR-15: money taken before the visit (payment link, CliQ, card by phone).
+  r.post('/:id/prepayments', wrap((req, res) => {
+    const staff = requireRole(db, req, 'AGENT', 'COORDINATOR', 'FINANCE');
+    const body = z.object({ method: z.enum(['CASH', 'CARD', 'LINK', 'TRANSFER', 'CLIQ']), amount: z.number().int().positive(), reference: z.string().optional() }).parse(req.body);
+    const request = getOr404(db, 'service_requests', req.params.id, 'Request');
+    if (['COMPLETED', 'CANCELLED', 'CONVERTED_TO_EPISODE', 'REFERRED_OUT'].includes(request.status)) throw new HttpError(409, `Request is ${request.status}`);
+    const id = db.insert('prepayments', { request_id: request.id, method: body.method, amount: body.amount, reference: body.reference, collected_by: staff.id, at: now(req) });
+    audit(db, staff.id, 'PREPAYMENT', 'service_requests', request.id, body);
+    res.status(201).json({ id, ...prepaymentStatus(db, request, now(req)) });
   }));
 
   // Coordinator routes the request and assigns staff (BPMN gateway "توجيه الطلب").
@@ -312,6 +421,12 @@ export function requestRoutes(db: Db): Router {
         assignee.id, at.toISOString(),
       );
       if (clash) throw new HttpError(409, 'Staff already has a visit within an hour of that time. Propose another slot.');
+      const pre = prepaymentStatus(db, request, now(req));
+      if (pre.outstanding > 0) {
+        throw new HttpError(409, `Patient has ${NO_SHOW_PREPAY_THRESHOLD} or more no-shows in ${NO_SHOW_WINDOW_DAYS} days: collect a prepayment of ${(pre.outstanding / 1000).toFixed(3)} JOD before booking (BR-24)`);
+      }
+      // Rescheduling replaces the booked visit instead of leaving two visits open for the same request.
+      db.run(`UPDATE visits SET status = 'CANCELLED', cancelled_at = ? WHERE request_id = ? AND status = 'SCHEDULED'`, now(req).toISOString(), request.id);
 
       setStatus(db, request, 'SCHEDULED', staff.id, `${body.route} → ${assignee.name}`);
       db.update('service_requests', request.id, { route: body.route });
