@@ -1,3 +1,4 @@
+import { cfg } from '../settings.js';
 // Consent rules (BRD §5.8 BR-80, with the guardian rule BR-03).
 
 export const CONSENT_TYPES = ['GENERAL_TREATMENT', 'INVASIVE_PROCEDURE', 'IMAGING', 'PHOTOGRAPHY', 'DATA_SHARING_FAMILY', 'GUARDIAN_ACCESS'] as const;
@@ -10,7 +11,6 @@ export type ConsentMethod = (typeof CONSENT_METHODS)[number];
 export const SIGNER_RELATIONS = ['SELF', 'PARENT', 'SPOUSE', 'CHILD', 'SIBLING', 'LEGAL_GUARDIAN'] as const;
 export type SignerRelation = (typeof SIGNER_RELATIONS)[number];
 
-export const ADULT_AGE = 18;
 
 export interface ConsentRecord {
   type: string;
@@ -30,8 +30,8 @@ export function ageOn(dob: string | null | undefined, at: Date): number | null {
 /** Returns an error message when the signer is not allowed, or null when the signature is valid. */
 export function signerError(opts: { patientDob: string | null; relation: SignerRelation; at: Date }): string | null {
   const age = ageOn(opts.patientDob, opts.at);
-  if (opts.relation === 'SELF' && age !== null && age < ADULT_AGE) {
-    return `Patient is under ${ADULT_AGE}: a guardian must sign the consent (BR-03)`;
+  if (opts.relation === 'SELF' && age !== null && age < cfg().adultAge) {
+    return `Patient is under ${cfg().adultAge}: a guardian must sign the consent (BR-03)`;
   }
   return null;
 }

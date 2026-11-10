@@ -1,3 +1,5 @@
+import { cfg, localParts } from '../settings.js';
+
 // Quote calculation (BRD §5.2). Money is integer fils (1 JOD = 1000 fils).
 
 export interface PriceItem {
@@ -36,14 +38,17 @@ export interface Quote {
   patientTotal: number;
 }
 
-export const AFTER_HOURS_MULTIPLIER = 1.25;
-/** Max discount a coordinator may give without manager approval (BR-11). */
-export const COORDINATOR_DISCOUNT_LIMIT = 10;
-
-/** 20:00–07:00 or Friday counts as after-hours (BR-16). */
+/**
+ * After-hours (BR-16), all from owner settings and in the business time zone:
+ * evening/night hours, whole weekdays (Friday by default) and public holidays.
+ */
 export function isAfterHours(at: Date): boolean {
-  const h = at.getHours();
-  return at.getDay() === 5 || h >= 20 || h < 7;
+  const s = cfg();
+  const { date, hour, weekday } = localParts(at);
+  if (s.afterHoursDays.includes(weekday) || s.holidays.includes(date)) return true;
+  return s.afterHoursStart > s.afterHoursEnd
+    ? hour >= s.afterHoursStart || hour < s.afterHoursEnd
+    : hour >= s.afterHoursStart && hour < s.afterHoursEnd;
 }
 
 export function buildQuote(
@@ -53,7 +58,7 @@ export function buildQuote(
 ): Quote {
   const discountPct = opts.discountPct ?? 0;
   if (discountPct < 0 || discountPct > 100) throw new Error('discountPct must be 0..100');
-  const multiplier = opts.scheduledAt && isAfterHours(opts.scheduledAt) ? AFTER_HOURS_MULTIPLIER : 1;
+  const multiplier = opts.scheduledAt && isAfterHours(opts.scheduledAt) ? cfg().afterHoursMultiplier : 1;
 
   const out: QuoteLine[] = lines.map((l) => {
     const p = prices.find((x) => x.serviceCode === l.serviceCode);
@@ -88,11 +93,10 @@ export function buildQuote(
 }
 
 /** Quote validity (BR-12): 48 h, or 4 h for same-day and urgent requests. */
-export const QUOTE_VALIDITY_HOURS = { ROUTINE: 48, SAME_DAY: 4, URGENT: 4 } as const;
-export type Urgency = keyof typeof QUOTE_VALIDITY_HOURS;
+export type Urgency = 'ROUTINE' | 'SAME_DAY' | 'URGENT';
 
 export function quoteValidUntil(issuedAt: Date, urgency: Urgency): Date {
-  return new Date(issuedAt.getTime() + QUOTE_VALIDITY_HOURS[urgency] * 3600_000);
+  return new Date(issuedAt.getTime() + (urgency === 'ROUTINE' ? cfg().quoteValidityRoutineH : cfg().quoteValidityUrgentH) * 3600_000);
 }
 
 export function isQuoteExpired(validUntil: string | Date | null | undefined, at: Date): boolean {

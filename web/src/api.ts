@@ -33,6 +33,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export const api = {
   get: <T,>(url: string) => call<T>('GET', url),
   post: <T,>(url: string, body: unknown = {}) => call<T>('POST', url, body),
+  put: <T,>(url: string, body: unknown = {}) => call<T>('PUT', url, body),
 };
 
 /** Fils → "12.500 د.أ" */
@@ -68,11 +69,11 @@ export const ROUTE_AR: Record<string, string> = { DIRECT: 'خدمة مباشرة
 export function escalationAr(trigger: string, level: string): string {
   if (trigger === 'NEWS2') {
     if (level === 'HIGH') return 'طوارئ: إسعاف، إبلاغ الطبيب والعائلة، تعليق الرعاية';
-    if (level === 'MEDIUM') return 'إعادة القياس بعد 15 دقيقة، وإذا لسا ≥ 5 بيتبلّغ الطبيب المناوب (يرد خلال 15 دقيقة)';
+    if (level === 'MEDIUM') return 'إعادة القياس، وإذا لسا ≥ 5 بيتبلّغ الطبيب المناوب، وإذا ما رد بالمهلة بيتصعّد للمدير الطبي';
     if (level === 'LOW_MEDIUM') return 'قراءة وحدة بدرجة 3: مراجعة عاجلة من الطبيب';
   }
-  if (trigger === 'CRITICAL_RESULT') return 'نتيجة حرجة: الطبيب لازم يؤكد استلامها خلال 30 دقيقة';
-  if (trigger === 'LATE_SHIFT') return 'الممرض ما سجّل حضور: اتصل فيه، وابعت بديل إذا ما في وقت وصول خلال 15 دقيقة';
+  if (trigger === 'CRITICAL_RESULT') return 'نتيجة حرجة: الطبيب لازم يؤكد استلامها، وإلا بتتصعّد للمدير الطبي';
+  if (trigger === 'LATE_SHIFT') return 'الممرض ما سجّل حضور: اتصل فيه، وابعت بديل إذا ما عنده وقت وصول قريب';
   if (trigger === 'INCIDENT') return 'حادثة: مراجعة المشرف';
   return level;
 }

@@ -2,14 +2,12 @@
 // Patients rate once per request; low scores open a follow-up for the supervisor.
 import { Router } from 'express';
 import { z } from 'zod';
+import { cfg } from '../settings.js';
 import type { Db } from '../db.js';
 import { audit, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { patientFromToken } from './patientApp.js';
 
-/** Scores at or below this open a follow-up call. */
-export const LOW_SCORE = 2;
-/** How long after the visit the app keeps asking for a rating. */
-export const RATING_WINDOW_DAYS = 14;
+// Low-score threshold and rating window come from owner settings (feedbackLowScore, feedbackWindowDays).
 const RATEABLE = ['COMPLETED', 'CONVERTED_TO_EPISODE', 'REFERRED_OUT'];
 
 export const FEEDBACK_TAGS = ['ON_TIME', 'LATE', 'KIND_STAFF', 'CLEAR_EXPLANATION', 'PAIN', 'PRICE', 'HYGIENE', 'COMMUNICATION'] as const;
@@ -35,7 +33,7 @@ export function feedbackRoutes(db: Db): Router {
   // Patient: finished requests still waiting for a rating (inside the window).
   r.get('/me/feedback/pending', wrap((req) => {
     const p = patientFromToken(db, req);
-    const since = new Date(now(req).getTime() - RATING_WINDOW_DAYS * 86_400_000).toISOString();
+    const since = new Date(now(req).getTime() - cfg().feedbackWindowDays * 86_400_000).toISOString();
     const rows = db.all(
       `SELECT r.id, r.request_no, r.status FROM service_requests r
        WHERE r.patient_id = ? AND r.status IN (${RATEABLE.map(() => '?').join(',')})
@@ -64,7 +62,7 @@ export function feedbackRoutes(db: Db): Router {
     if (!RATEABLE.includes(request.status)) throw new HttpError(409, 'You can rate a visit once it is finished');
     if (db.get('SELECT 1 FROM visit_feedback WHERE request_id = ?', request.id)) throw new HttpError(409, 'Already rated, thank you');
     const v = lastVisit(db, request.id);
-    const low = body.score <= LOW_SCORE;
+    const low = body.score <= cfg().feedbackLowScore;
     const id = db.insert('visit_feedback', {
       request_id: request.id, patient_id: p.id, staff_id: v?.staff_id, score: body.score, tags: body.tags,
       comment: body.comment || undefined, follow_up: low ? 'OPEN' : 'NONE', created_at: now(req),

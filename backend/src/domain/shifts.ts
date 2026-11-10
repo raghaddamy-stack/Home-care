@@ -1,11 +1,9 @@
-// Roster generation and attendance rules (BRD §5.4).
+// Roster generation and attendance rules (BRD §5.4). Limits come from owner settings.
+import { cfg } from '../settings.js';
 
 export const SHIFT_PATTERNS = [8, 12, 24] as const;
 export type ShiftHours = (typeof SHIFT_PATTERNS)[number];
 
-export const CHECK_IN_GRACE_MIN = 15;
-export const BILLING_ROUND_MIN = 15;
-export const LATE_TOLERANCE_MIN = 10;
 
 export interface PlannedShift {
   start: Date;
@@ -44,7 +42,7 @@ export function buildRoster(opts: {
 /** True when a planned shift has passed its grace period without a check-in. */
 export function isLate(plannedStart: Date, checkedInAt: Date | null, now: Date): boolean {
   if (checkedInAt) return false;
-  return now.getTime() > plannedStart.getTime() + CHECK_IN_GRACE_MIN * 60_000;
+  return now.getTime() > plannedStart.getTime() + cfg().checkInGraceMin * 60_000;
 }
 
 /**
@@ -56,10 +54,10 @@ export function billableMinutes(p: { plannedStart: Date; plannedEnd: Date; check
   let from = p.checkIn.getTime();
   const to = Math.min(p.checkOut.getTime(), p.plannedEnd.getTime());
   const lateMin = (from - p.plannedStart.getTime()) / 60_000;
-  if (lateMin > 0 && lateMin <= LATE_TOLERANCE_MIN && p.checkOut >= p.plannedEnd) from = p.plannedStart.getTime();
+  if (lateMin > 0 && lateMin <= cfg().lateToleranceMin && p.checkOut >= p.plannedEnd) from = p.plannedStart.getTime();
   from = Math.max(from, p.plannedStart.getTime());
   const mins = Math.max(0, (to - from) / 60_000);
-  return Math.round(mins / BILLING_ROUND_MIN) * BILLING_ROUND_MIN;
+  return Math.round(mins / cfg().billingRoundMin) * cfg().billingRoundMin;
 }
 
 /** Haversine distance in metres, used for GPS check-in (BR-26: within 150 m). */
@@ -72,12 +70,8 @@ export function distanceMetres(a: { lat: number; lng: number }, b: { lat: number
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export const CHECK_IN_RADIUS_M = 150;
 
-/** BR-33 nurse working-time limits ([Proposed], to confirm against the Jordan Labour Law and contracts). */
-export const MAX_HOURS_PER_7_DAYS = 60;
-export const MIN_REST_HOURS = 11;
-export const MAX_CONSECUTIVE_24H = 2;
+/** BR-33 nurse working-time limits come from owner settings (minRestHours, maxHoursPer7Days, maxConsecutive24h). */
 
 export interface TimeSlot {
   start: Date;
@@ -92,6 +86,7 @@ export interface TimeSlot {
  */
 export function workingTimeViolations(slots: TimeSlot[]): string[] {
   const s = [...slots].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const { minRestHours: MIN_REST_HOURS, maxConsecutive24h: MAX_CONSECUTIVE_24H, maxHoursPer7Days: MAX_HOURS_PER_7_DAYS } = cfg();
   const out: string[] = [];
   const h = (ms: number) => ms / 3600_000;
   const len = (x: TimeSlot) => h(x.end.getTime() - x.start.getTime());

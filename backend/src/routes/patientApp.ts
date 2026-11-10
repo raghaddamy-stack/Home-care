@@ -2,14 +2,12 @@
 import { Router, type Request } from 'express';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { z } from 'zod';
+import { cfg } from '../settings.js';
 import type { Db, Row } from '../db.js';
 import { HttpError, notify, now, wrap } from '../http.js';
 import { acceptQuote, cancellationQuote, cancelRequest, CreateRequest, createServiceRequest, missingInfo, setStatus } from './requests.js';
 import { recordConsent } from './consent.js';
 
-const OTP_TTL_MIN = 5;
-const OTP_MAX_ATTEMPTS = 5;
-const SESSION_DAYS = 30;
 /** Show the code in the API response outside production so demos work without an SMS gateway. */
 const EXPOSE_DEV_CODE = process.env.NODE_ENV !== 'production';
 
@@ -38,6 +36,7 @@ const Profile = z.object({
   lat: z.number().optional(),
   lng: z.number().optional(),
   emergencyContact: z.string().optional(),
+  preferredStaffGender: z.enum(['M', 'F']).nullable().optional(),
 });
 
 export function patientAppRoutes(db: Db): Router {
@@ -55,7 +54,7 @@ export function patientAppRoutes(db: Db): Router {
     const code = String(randomInt(100000, 1000000));
     db.insert('patient_otps', {
       national_id: body.nationalId, phone, full_name: body.fullName, code_hash: sha(code),
-      expires_at: new Date(Date.now() + OTP_TTL_MIN * 60_000),
+      expires_at: new Date(Date.now() + cfg().otpTtlMin * 60_000),
     });
     notify(db, `phone:${phone}`, 'SMS', `Your Home Care code: ${code}`);
     return { sent: true, isNew: !existing, ...(EXPOSE_DEV_CODE ? { devCode: code } : {}) };
@@ -66,7 +65,7 @@ export function patientAppRoutes(db: Db): Router {
     const body = z.object({ nationalId: z.string(), code: z.string().length(6) }).parse(req.body);
     const otp = db.get(`SELECT * FROM patient_otps WHERE national_id = ? AND used_at IS NULL ORDER BY id DESC LIMIT 1`, body.nationalId);
     if (!otp || new Date(otp.expires_at) < new Date()) throw new HttpError(400, 'Code expired, request a new one');
-    if (otp.attempts >= OTP_MAX_ATTEMPTS) throw new HttpError(429, 'Too many attempts, request a new code');
+    if (otp.attempts >= cfg().otpMaxAttempts) throw new HttpError(429, 'Too many attempts, request a new code');
     if (otp.code_hash !== sha(body.code)) {
       db.update('patient_otps', otp.id, { attempts: otp.attempts + 1 });
       throw new HttpError(400, 'Wrong code');
@@ -79,7 +78,7 @@ export function patientAppRoutes(db: Db): Router {
         p = db.get('SELECT * FROM patients WHERE id = ?', id)!;
       } else if (!p.phone) db.update('patients', p.id, { phone: otp.phone });
       const token = randomBytes(32).toString('base64url');
-      db.insert('patient_sessions', { token_hash: sha(token), patient_id: p.id, expires_at: new Date(Date.now() + SESSION_DAYS * 86_400_000) });
+      db.insert('patient_sessions', { token_hash: sha(token), patient_id: p.id, expires_at: new Date(Date.now() + cfg().sessionDays * 86_400_000) });
       return { token, patient: { id: p.id, fullName: p.full_name } };
     });
   }));
@@ -95,7 +94,7 @@ export function patientAppRoutes(db: Db): Router {
     const p = patientFromToken(db, req);
     return {
       id: p.id, nationalId: p.national_id, fullName: p.full_name, dob: p.dob, gender: p.gender, phone: p.phone,
-      address: p.address, lat: p.lat, lng: p.lng, emergencyContact: p.emergency_contact,
+      address: p.address, lat: p.lat, lng: p.lng, emergencyContact: p.emergency_contact, preferredStaffGender: p.preferred_staff_gender,
       allergies: JSON.parse(p.allergies),
       results: db.all(
         `SELECT r.id, r.report, r.released_at, o.service_code, s.name_ar FROM results r JOIN orders o ON o.id = r.order_id
@@ -111,7 +110,7 @@ export function patientAppRoutes(db: Db): Router {
   r.post('/me/profile', wrap((req) => {
     const p = patientFromToken(db, req);
     const b = Profile.parse(req.body);
-    db.update('patients', p.id, { dob: b.dob, gender: b.gender, address: b.address, lat: b.lat, lng: b.lng, emergency_contact: b.emergencyContact });
+    db.update('patients', p.id, { dob: b.dob, gender: b.gender, address: b.address, lat: b.lat, lng: b.lng, emergency_contact: b.emergencyContact, preferred_staff_gender: b.preferredStaffGender });
     // Requests waiting on missing data move on once the file is complete.
     const waiting = db.all(`SELECT * FROM service_requests WHERE patient_id = ? AND status = 'PENDING_INFO'`, p.id);
     for (const w of waiting) if (missingInfo(db, w).length === 0) setStatus(db, w, 'UNDER_REVIEW', undefined, 'Completed in app');

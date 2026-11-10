@@ -4,8 +4,9 @@ import { randomInt } from 'node:crypto';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { assertTransition, ROUTES, type RequestStatus, type Route } from '../domain/requestStatus.js';
-import { buildQuote, COORDINATOR_DISCOUNT_LIMIT, isQuoteExpired, quoteValidUntil, type Coverage, type Urgency } from '../domain/pricing.js';
-import { cancellationFee, NO_SHOW_PREPAY_THRESHOLD, NO_SHOW_WINDOW_DAYS, prepaymentRequired } from '../domain/patientPolicy.js';
+import { buildQuote, isQuoteExpired, quoteValidUntil, type Coverage, type Urgency } from '../domain/pricing.js';
+import { cancellationFee, prepaymentRequired } from '../domain/patientPolicy.js';
+import { cfg } from '../settings.js';
 import { buildInvoiceLines } from '../domain/billing.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { createInvoice } from './visits.js';
@@ -21,6 +22,7 @@ const PatientInput = z.object({
   lng: z.number().optional(),
   zoneId: z.number().int().optional(),
   emergencyContact: z.string().optional(),
+  preferredStaffGender: z.enum(['M', 'F']).nullable().optional(),
 });
 
 export const CreateRequest = z.object({
@@ -76,6 +78,7 @@ function upsertPatient(db: Db, p: z.infer<typeof PatientInput>): number {
     lng: p.lng,
     zone_id: p.zoneId,
     emergency_contact: p.emergencyContact,
+    preferred_staff_gender: p.preferredStaffGender,
   };
   if (existing) {
     // Only fill in or correct provided fields; never blank existing data.
@@ -111,6 +114,20 @@ function visitKindFor(db: Db, requestId: number, route: Route): string {
     requestId,
   )!.line;
   return ({ LAB: 'LAB', IMG: 'IMAGING', DEV: 'DEVICE', DOC: 'DOCTOR', NRS: 'NURSE' } as Record<string, string>)[line];
+}
+
+/**
+ * Patient preference for the staff member's gender. Owner setting `genderMatch`: OFF ignores it,
+ * WARN returns a warning the coordinator sees, BLOCK refuses the assignment.
+ */
+export function genderCheck(db: Db, patientId: number, staff: Row): string | null {
+  const mode = cfg().genderMatch;
+  if (mode === 'OFF') return null;
+  const pref = db.get<{ g: string | null }>('SELECT preferred_staff_gender AS g FROM patients WHERE id = ?', patientId)?.g;
+  if (!pref || !staff.gender || pref === staff.gender) return null;
+  const msg = `Patient prefers ${pref === 'F' ? 'female' : 'male'} staff; ${staff.name} does not match`;
+  if (mode === 'BLOCK') throw new HttpError(409, msg);
+  return msg;
 }
 
 export function assertStaffAvailable(db: Db, staffId: number, roles: string[], at: Date): Row {
@@ -166,9 +183,11 @@ function activeVisit(db: Db, requestId: number): Row | undefined {
   return db.get(`SELECT * FROM visits WHERE request_id = ? AND status IN ('SCHEDULED','DISPATCHED') ORDER BY id DESC LIMIT 1`, requestId);
 }
 
-/** Visit fee used by BR-23 / BR-24 = the patient's share of the accepted quote. */
+/** Visit fee used by BR-23 / BR-24: the patient's share or the full price of the accepted quote (owner setting). */
 export function visitFee(db: Db, requestId: number): number {
-  return db.get<{ p: number }>(`SELECT patient_total AS p FROM quotes WHERE request_id = ? AND status = 'ACCEPTED' ORDER BY version DESC LIMIT 1`, requestId)?.p ?? 0;
+  const q = db.get<{ p: number; t: number }>(`SELECT patient_total AS p, total AS t FROM quotes WHERE request_id = ? AND status = 'ACCEPTED' ORDER BY version DESC LIMIT 1`, requestId);
+  if (!q) return 0;
+  return cfg().feeBase === 'FULL_PRICE' ? q.t : q.p;
 }
 
 export function cancellationQuote(db: Db, request: Row, at: Date, initiatedBy: 'PATIENT' | 'COMPANY') {
@@ -209,11 +228,17 @@ export function noShowDates(db: Db, patientId: number): Date[] {
 }
 
 /** BR-24 prepayment position of a request: whether it is required, the amount due and what was collected. */
-export function prepaymentStatus(db: Db, request: Row, at: Date) {
-  const required = prepaymentRequired(noShowDates(db, request.patient_id), at);
+export function prepaymentStatus(db: Db, request: Row, at: Date, route?: string) {
+  const noShows = prepaymentRequired(noShowDates(db, request.patient_id), at);
+  // Owner setting: cash direct services (lab / imaging / device) are paid before the visit is booked.
+  // Before the coordinator routes it, a request made only of lab / imaging / device items is a direct service.
+  const onlyDirectItems = !db.get(`SELECT 1 FROM request_items i JOIN services s ON s.code = i.service_code WHERE i.request_id = ? AND s.line NOT IN ('LAB','IMG','DEV')`, request.id);
+  const effectiveRoute = route ?? request.route ?? (onlyDirectItems ? 'DIRECT' : null);
+  const beforeBooking = cfg().directServicePayment === 'BEFORE_BOOKING' && !request.policy_id && effectiveRoute === 'DIRECT';
+  const required = noShows || beforeBooking;
   const due = visitFee(db, request.id);
   const paid = db.get<{ s: number | null }>('SELECT SUM(amount) AS s FROM prepayments WHERE request_id = ?', request.id)!.s ?? 0;
-  return { required, due, paid, outstanding: required ? Math.max(0, due - paid) : 0 };
+  return { required, reason: noShows ? 'NO_SHOW' : beforeBooking ? 'PAY_BEFORE_BOOKING' : null, due, paid, outstanding: required ? Math.max(0, due - paid) : 0 };
 }
 
 /** Shared by call-center intake and the patient app: find/create the patient file, then the request. */
@@ -329,10 +354,10 @@ export function requestRoutes(db: Db): Router {
     }).parse(req.body);
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
 
-    if (body.discountPct > COORDINATOR_DISCOUNT_LIMIT) {
+    if (body.discountPct > cfg().coordinatorDiscountLimit) {
       const approver = body.approvedBy ? db.get('SELECT * FROM staff WHERE id = ?', body.approvedBy) : undefined;
       if (!approver || !['SUPERVISOR', 'ADMIN'].includes(approver.role)) {
-        throw new HttpError(403, `Discount above ${COORDINATOR_DISCOUNT_LIMIT}% needs a supervisor approval (BR-11)`);
+        throw new HttpError(403, `Discount above ${cfg().coordinatorDiscountLimit}% needs a supervisor approval (BR-11)`);
       }
     }
 
@@ -421,9 +446,13 @@ export function requestRoutes(db: Db): Router {
         assignee.id, at.toISOString(),
       );
       if (clash) throw new HttpError(409, 'Staff already has a visit within an hour of that time. Propose another slot.');
-      const pre = prepaymentStatus(db, request, now(req));
+      const warning = genderCheck(db, request.patient_id, assignee);
+      const pre = prepaymentStatus(db, request, now(req), body.route);
+      if (pre.outstanding > 0 && pre.reason === 'PAY_BEFORE_BOOKING') {
+        throw new HttpError(409, `Cash direct services are paid before booking: collect ${(pre.outstanding / 1000).toFixed(3)} JOD first (owner setting)`);
+      }
       if (pre.outstanding > 0) {
-        throw new HttpError(409, `Patient has ${NO_SHOW_PREPAY_THRESHOLD} or more no-shows in ${NO_SHOW_WINDOW_DAYS} days: collect a prepayment of ${(pre.outstanding / 1000).toFixed(3)} JOD before booking (BR-24)`);
+        throw new HttpError(409, `Patient has ${cfg().noShowPrepayThreshold} or more no-shows in ${cfg().noShowWindowDays} days: collect a prepayment of ${(pre.outstanding / 1000).toFixed(3)} JOD before booking (BR-24)`);
       }
       // Rescheduling replaces the booked visit instead of leaving two visits open for the same request.
       db.run(`UPDATE visits SET status = 'CANCELLED', cancelled_at = ? WHERE request_id = ? AND status = 'SCHEDULED'`, now(req).toISOString(), request.id);
@@ -434,7 +463,7 @@ export function requestRoutes(db: Db): Router {
       const visitId = db.insert('visits', { request_id: request.id, staff_id: assignee.id, kind, scheduled_at: at, otp });
       notify(db, `staff:${assignee.id}`, 'PUSH', `New ${kind} visit ${request.request_no} at ${at.toISOString()}`);
       notify(db, `patient:${request.patient_id}`, 'SMS', `Booked: ${assignee.name} at ${at.toISOString()}. Visit code ${otp}`);
-      return { visitId, kind, status: request.status };
+      return { visitId, kind, status: request.status, warnings: warning ? [warning] : [] };
     });
   }));
 

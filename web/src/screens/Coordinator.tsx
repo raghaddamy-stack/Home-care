@@ -1,7 +1,7 @@
 // Coordinator console: request board (review → quote → schedule), home-care episodes (roster), and alerts.
 import { useMemo, useState } from 'react';
 import { api, escalationAr, fmtTime, isoToLocal, jod, localToIso, ROLE_AR, ROUTE_AR, type RequestRow, type Service, type Staff } from '../api';
-import { Drawer, Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { Drawer, Empty, Field, Pill, useAction, useLoad, useToast } from '../ui';
 import { agoAr, LiveStamp, minutesSince, usePolling, useUpdatedAt } from '../live';
 import { KpiStrip, SlaBadge, type Dashboard } from './CoordinatorKpis';
 
@@ -39,7 +39,9 @@ const LINE_ROLES: Record<string, string[]> = { LAB: ['LAB_TECH', 'NURSE'], IMG: 
 
 function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number; onClose: () => void; onChanged: () => void; staff: Staff[]; services: Service[] }) {
   const detail = useLoad(() => api.get<any>(`/requests/${id}`), [id]);
+  const policy = useLoad(() => api.get<any>('/settings/public'));
   const { busy, run } = useAction();
+  const toast = useToast();
   const d = detail.data;
 
   const [discount, setDiscount] = useState(0);
@@ -81,7 +83,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
             <section className="action">
               <h3>{d.status === 'QUOTED' ? 'تعديل عرض السعر' : d.status === 'EXPIRED' ? 'العرض انتهى: سعّر من جديد' : 'التسعير'}</h3>
               <div className="grid-3">
-                <Field label="خصم %" hint="فوق 10% بدها موافقة مشرف"><input id="disc" type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))} /></Field>
+                <Field label="خصم %" hint={`فوق ${policy.data?.coordinatorDiscountLimit ?? 10}% بدها موافقة مشرف`}><input id="disc" type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))} /></Field>
                 {discount > 10 && (
                   <Field label="موافقة">
                     <select id="appr" value={approver} onChange={(e) => setApprover(e.target.value)}>
@@ -91,7 +93,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                   </Field>
                 )}
                 {d.policy_id && <Field label="رقم موافقة التأمين" hint="إذا الخدمة بدها موافقة مسبقة"><input id="preno" value={preNo} onChange={(e) => setPreNo(e.target.value)} /></Field>}
-                <Field label="موعد مبدئي" hint="بعد 8 مساءً والجمعة ×1.25"><input id="qwhen" type="datetime-local" value={at} onChange={(e) => setWhen(e.target.value)} /></Field>
+                <Field label="موعد مبدئي" hint={policy.data ? `بعد الساعة ${policy.data.afterHoursStart} وأيام العطل ×${policy.data.afterHoursMultiplier}` : undefined}><input id="qwhen" type="datetime-local" value={at} onChange={(e) => setWhen(e.target.value)} /></Field>
               </div>
               <button className="primary" disabled={busy} onClick={() => run(async () => {
                 const res = await api.post<any>(`/requests/${id}/quote`, {
@@ -115,7 +117,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 </tbody>
                 <tfoot><tr><td colSpan={2}>المجموع</td><td className="mono">{jod(latestQuote.total)}</td><td className="mono">{jod(latestQuote.payer_total)}</td><td className="mono"><strong>{jod(latestQuote.patient_total)}</strong></td></tr></tfoot>
               </table>
-              {latestQuote.valid_until && latestQuote.status === 'SENT' && <p className="small muted">صالح لغاية {fmtTime(latestQuote.valid_until)} (48 ساعة، و4 ساعات لطلبات نفس اليوم)</p>}
+              {latestQuote.valid_until && latestQuote.status === 'SENT' && <p className="small muted">صالح لغاية {fmtTime(latestQuote.valid_until)}</p>}
               {d.status === 'QUOTED' && (
                 <button className="secondary" disabled={busy} onClick={() => run(async () => { await api.post(`/requests/${id}/accept`, { evidence: 'phone' }); after(); }, 'تم تسجيل موافقة المريض')}>
                   المريض وافق بالتلفون
@@ -145,7 +147,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
               </div>
               {d.prepayment?.outstanding > 0 && (
                 <div className="notice warn stack">
-                  <span>المريض عنده غيابين أو أكثر خلال 30 يوم: لازم يدفع {jod(d.prepayment.outstanding)} مسبقاً قبل الحجز.</span>
+                  <span>{d.prepayment.reason === 'PAY_BEFORE_BOOKING' ? `سياسة الشركة: الخدمات المباشرة النقدية بتندفع قبل الحجز. لازم يدفع ${jod(d.prepayment.outstanding)} أول.` : `المريض تكرّر غيابه: لازم يدفع ${jod(d.prepayment.outstanding)} مسبقاً قبل الحجز.`}</span>
                   <div className="row">
                     <Field label="المبلغ (د.أ)"><input inputMode="decimal" value={preAmount} onChange={(e) => setPreAmount(e.target.value)} placeholder={(d.prepayment.outstanding / 1000).toFixed(3)} /></Field>
                     <Field label="الطريقة"><select value={preMethod} onChange={(e) => setPreMethod(e.target.value)}><option value="LINK">رابط دفع</option><option value="CLIQ">CliQ</option><option value="CARD">بطاقة</option><option value="TRANSFER">تحويل</option></select></Field>
@@ -157,7 +159,8 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 </div>
               )}
               <button className="primary" disabled={busy || !assignee} onClick={() => run(async () => {
-                await api.post(`/requests/${id}/schedule`, { route, staffId: Number(assignee), scheduledAt: localToIso(at) });
+                const r = await api.post<{ warnings?: string[] }>(`/requests/${id}/schedule`, { route, staffId: Number(assignee), scheduledAt: localToIso(at) });
+                if (r.warnings?.length) toast('تنبيه: جنس الموظف مش متل ما بيفضّل المريض. تأكد مع العائلة.', 'err');
                 after();
               }, 'تم التعيين وإبلاغ المريض والكادر')}>تعيين</button>
             </section>
@@ -182,7 +185,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 <button className="danger" disabled={busy || reason.trim().length < 3} onClick={() => run(async () => { await api.post(`/requests/${id}/cancel`, { reason, initiatedBy: byCompany ? 'COMPANY' : 'PATIENT' }); after(); }, 'تم الإلغاء')}>إلغاء</button>
               </div>
               <label className="check small"><input type="checkbox" checked={byCompany} onChange={(e) => setByCompany(e.target.checked)} /> الإلغاء من طرفنا (بدون رسوم)</label>
-              {!byCompany && d.cancellation?.fee > 0 && <p className="small">رسوم إلغاء على المريض حسب السياسة: <strong>{jod(d.cancellation.fee)}</strong> ({d.cancellation.pct}%). مجاني إذا قبل الموعد بأكثر من 24 ساعة.</p>}
+              {!byCompany && d.cancellation?.fee > 0 && <p className="small">رسوم إلغاء على المريض حسب السياسة: <strong>{jod(d.cancellation.fee)}</strong> ({d.cancellation.pct}%). مجاني إذا قبل الموعد بأكثر من {policy.data?.freeCancelNoticeH ?? 24} ساعة.</p>}
             </section>
           )}
 
@@ -247,6 +250,7 @@ function Episodes({ staff }: { staff: Staff[] }) {
   const [open, setOpen] = useState<number | null>(null);
   const detail = useLoad(() => (open ? api.get<any>(`/episodes/${open}`) : Promise.resolve(null)), [open]);
   const { busy, run } = useAction();
+  const toast = useToast();
   const [start, setStart] = useState(() => { const d = new Date(Date.now() + 86_400_000); d.setHours(7, 0, 0, 0); return isoToLocal(d); });
   const [nurses, setNurses] = useState<number[]>([]);
   const nurseList = staff.filter((s) => s.role === 'NURSE');
@@ -291,7 +295,8 @@ function Episodes({ staff }: { staff: Staff[] }) {
                   })}
                 </div>
                 <button className="primary" disabled={busy || nurses.length === 0} onClick={() => run(async () => {
-                  const r = await api.post<{ shifts: number }>(`/episodes/${ep.id}/roster`, { start: localToIso(start), nurseIds: nurses });
+                  const r = await api.post<{ shifts: number; warnings?: string[] }>(`/episodes/${ep.id}/roster`, { start: localToIso(start), nurseIds: nurses });
+                  if (r.warnings?.length) toast(`تنبيه: ${r.warnings.length} ممرض/ة جنسهم مش متل ما بيفضّل المريض.`, 'err');
                   detail.reload(); list.reload();
                   return r;
                 }, 'تم نشر الجدول على تطبيق الممرضين')}>نشر الجدول</button>
@@ -320,6 +325,7 @@ function Alerts({ staff }: { staff: Staff[] }) {
   const shifts = useLoad(() => api.get<any[]>('/shifts'));
   const esc = useLoad(() => api.get<any[]>('/escalations?status=OPEN'));
   const { busy, run } = useAction();
+  const toast = useToast();
   const [pick, setPick] = useState<Record<number, string>>({});
   const late = (shifts.data ?? []).filter((s) => s.status === 'LATE');
   const nurses = staff.filter((s) => s.role === 'NURSE');
@@ -336,7 +342,7 @@ function Alerts({ staff }: { staff: Staff[] }) {
             if (!r.late.length) throw new Error('ما في تأخير جديد');
           }, 'تم رصد شفتات متأخرة')}>افحص الآن</button>
         </div>
-        <p className="muted small">أي شفت ما سجّل فيه الممرض حضور بعد 15 دقيقة من بدايته بيظهر هون.</p>
+        <p className="muted small">أي شفت ما سجّل فيه الممرض حضور بعد مهلة السماح (حسب إعدادات المالك) بيظهر هون.</p>
         {!late.length && <Empty>كل الشفتات الحالية مغطاة.</Empty>}
         <ul className="list">
           {late.map((s) => (
@@ -351,7 +357,8 @@ function Alerts({ staff }: { staff: Staff[] }) {
                   {nurses.filter((n) => n.id !== s.nurse_id).map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
                 </select>
                 <button className="primary" disabled={busy || !pick[s.id]} onClick={() => run(async () => {
-                  await api.post(`/shifts/${s.id}/reassign`, { nurseId: Number(pick[s.id]) });
+                  const r = await api.post<{ warnings?: string[] }>(`/shifts/${s.id}/reassign`, { nurseId: Number(pick[s.id]) });
+                  if (r.warnings?.length) toast('تنبيه: جنس البديل مش متل ما بيفضّل المريض.', 'err');
                   reload();
                 }, 'انبعت الممرض البديل')}>أرسل</button>
               </div>

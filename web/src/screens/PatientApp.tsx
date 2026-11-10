@@ -226,7 +226,7 @@ function NewRequest({ onDone }: { onDone: () => void }) {
 function MyFile({ me, reload }: { me: any; reload: () => void }) {
   const { busy, run } = useAction();
   const [f, setF] = useState({
-    dob: me.dob ?? '', gender: me.gender ?? '', address: me.address ?? '', emergencyContact: me.emergencyContact ?? '',
+    dob: me.dob ?? '', gender: me.gender ?? '', address: me.address ?? '', emergencyContact: me.emergencyContact ?? '', preferredStaffGender: me.preferredStaffGender ?? '',
     lat: me.lat as number | null, lng: me.lng as number | null,
   });
   const locate = () => run(() => new Promise<void>((resolve, reject) => {
@@ -244,7 +244,7 @@ function MyFile({ me, reload }: { me: any; reload: () => void }) {
         run(async () => {
           await api.post('/me/profile', {
             dob: f.dob || undefined, gender: f.gender || undefined, address: f.address || undefined,
-            emergencyContact: f.emergencyContact || undefined, lat: f.lat ?? undefined, lng: f.lng ?? undefined,
+            emergencyContact: f.emergencyContact || undefined, preferredStaffGender: f.preferredStaffGender || null, lat: f.lat ?? undefined, lng: f.lng ?? undefined,
           });
           reload();
         }, 'تم حفظ بياناتك');
@@ -261,6 +261,9 @@ function MyFile({ me, reload }: { me: any; reload: () => void }) {
           <button type="button" className="secondary" disabled={busy} onClick={locate}>استخدم موقعي الحالي</button>
           <span className="small muted">{f.lat != null ? `تم تحديد الموقع (${f.lat.toFixed(4)}, ${f.lng!.toFixed(4)})` : 'الموقع مش محدد'}</span>
         </div>
+        <Field label="بتفضّل الممرض/الطبيب يكون" hint="بنحاول نلتزم فيه قدر الإمكان">
+          <select id="m-pref" value={f.preferredStaffGender} onChange={(e) => setF({ ...f, preferredStaffGender: e.target.value })}><option value="">ما بتفرق</option><option value="F">أنثى</option><option value="M">ذكر</option></select>
+        </Field>
         <Field label="رقم شخص للطوارئ"><input id="m-emg" value={f.emergencyContact} onChange={(e) => setF({ ...f, emergencyContact: e.target.value })} placeholder="الاسم والرقم" /></Field>
         <button className="primary" disabled={busy}>حفظ</button>
       </form>

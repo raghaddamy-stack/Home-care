@@ -30,6 +30,19 @@ React + Vite, Arabic right-to-left, light and dark themes. Pick a demo account o
 | Patient / family | تطبيق المريض (`/#patient`) | Sign in with national ID + SMS code (shown on screen in dev), book services, complete the file (GPS from the phone), approve or decline the price, track the request step by step, see the visit time, staff name and visit code, results and invoices |
 | Finance | المالية | Run the weekly/monthly cycle, review lines, issue (blocked if hours ≠ attendance), record payments |
 
+## Owner settings (إعدادات المالك)
+
+Every business rule with a number or a choice is configurable by the owner (ADMIN role) from the **إعدادات المالك** screen, without a code change. Defaults and validation live in `backend/src/settings.ts`; values are stored in the `settings` table and every change is recorded in `settings_history` (who, when, old → new). Changes apply to the next action; existing quotes and invoices are not touched.
+
+| Group | Settings |
+|---|---|
+| Pricing & time | time zone, after-hours multiplier, hours, whole days (e.g. Friday/Saturday), public holidays, coordinator discount limit, quote validity (routine / urgent) |
+| Cancellation & no-show | fee base (patient share or full price), free-cancel and full-fee notice, partial %, no-show %, minimum fee, cap at visit price, repeat no-show prepayment threshold and window |
+| Payment & billing | cash direct services paid at the door or before booking, nursing billed in arrears or in advance (planned roster, settled against attendance on the next run), rounding, late tolerance |
+| Staff & shifts | staff gender preference (off / warn / block), max hours per 7 days, minimum rest, consecutive 24 h shifts, check-in grace, GPS radius |
+| Clinical | medical director, on-call doctors, critical-result and NEWS2 response times, recheck time, auto-release of normal results (0 = doctor review only), consent hard stop, age of majority |
+| SLA, patient app, feedback | SLA targets on the coordinator board, OTP validity and attempts, session length, low-rating threshold and rating window |
+
 ## Backend (`backend/`)
 
 Node 22 + TypeScript + Express. Uses the built-in `node:sqlite` for development, and the schema is plain SQL so it can move to PostgreSQL.

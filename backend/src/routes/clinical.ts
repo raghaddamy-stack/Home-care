@@ -1,12 +1,13 @@
 // Home-care path: assessment → episode → care plan → orders → results → roster → shifts → escalation → discharge.
 import { Router } from 'express';
 import { z } from 'zod';
+import { cfg, escalationRecipients } from '../settings.js';
 import type { Db, Row } from '../db.js';
 import { needsEscalation, scoreNews2 } from '../domain/news2.js';
-import { billableMinutes, buildRoster, CHECK_IN_RADIUS_M, distanceMetres, isLate, SHIFT_PATTERNS, workingTimeViolations, type TimeSlot } from '../domain/shifts.js';
-import { CRITICAL_RESULT_ACK_MIN, dueAt, isOverdue, NEWS2_RECHECK_MIN, RESULT_AUTO_RELEASE_H, timerFor } from '../domain/escalation.js';
+import { billableMinutes, buildRoster, distanceMetres, isLate, SHIFT_PATTERNS, workingTimeViolations, type TimeSlot } from '../domain/shifts.js';
+import { dueAt, isOverdue, timerFor } from '../domain/escalation.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
-import { assertStaffAvailable, setStatus } from './requests.js';
+import { assertStaffAvailable, genderCheck, setStatus } from './requests.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
 /**
@@ -39,7 +40,7 @@ function openEscalation(db: Db, episodeId: number, trigger: string, level: strin
     episode_id: episodeId, trigger, level, action, ref_id: refId, opened_at: at, due_at: due ?? undefined,
     escalated_at: immediate ? at : undefined, escalated_to: immediate ? timerFor(trigger, level)!.escalateTo : undefined,
   });
-  if (immediate) notify(db, `role:${timerFor(trigger, level)!.escalateTo}`, 'CALL', `${trigger} ${level} escalation #${id}: review now`);
+  if (immediate) for (const rcpt of escalationRecipients(timerFor(trigger, level)!.escalateTo)) notify(db, rcpt, 'CALL', `${trigger} ${level} escalation #${id}: review now`);
   return id;
 }
 
@@ -60,17 +61,17 @@ export function runEscalationTimers(db: Db, at: Date) {
       if (!isOverdue(e, at)) continue;
       const to = timerFor(e.trigger, e.level)!.escalateTo;
       db.update('escalations', e.id, { escalated_at: at, escalated_to: to });
-      notify(db, `role:${to}`, 'CALL', `Escalation #${e.id} (${e.trigger} ${e.level}) not answered in time: respond now`);
+      for (const rcpt of escalationRecipients(to)) notify(db, rcpt, 'CALL', `Escalation #${e.id} (${e.trigger} ${e.level}) not answered in time: respond now`);
       if (e.trigger === 'CRITICAL_RESULT' && e.ref_id) db.update('results', e.ref_id, { escalated_at: at });
       escalated.push(e.id);
     }
-    const cutoff = new Date(at.getTime() - CRITICAL_RESULT_ACK_MIN * 60_000).toISOString();
+    const cutoff = new Date(at.getTime() - cfg().criticalResultAckMin * 60_000).toISOString();
     for (const r of db.all(`SELECT * FROM results WHERE critical = 1 AND acknowledged_by IS NULL AND escalated_at IS NULL AND created_at <= ?`, cutoff)) {
       db.update('results', r.id, { escalated_at: at });
-      notify(db, 'role:MEDICAL_DIRECTOR', 'CALL', `Critical result #${r.id} not acknowledged within ${CRITICAL_RESULT_ACK_MIN} min: call the patient now`);
+      for (const rcpt of escalationRecipients('MEDICAL_DIRECTOR')) notify(db, rcpt, 'CALL', `Critical result #${r.id} not acknowledged within ${cfg().criticalResultAckMin} min: call the patient now`);
       escalatedResults.push(r.id);
     }
-    const recheckCutoff = new Date(at.getTime() - NEWS2_RECHECK_MIN * 60_000).toISOString();
+    const recheckCutoff = new Date(at.getTime() - cfg().news2RecheckMin * 60_000).toISOString();
     for (const e of db.all(
       `SELECT x.*, v.shift_id, v.at AS reading_at FROM escalations x JOIN vitals v ON v.id = x.ref_id
        WHERE x.trigger = 'NEWS2' AND x.level = 'MEDIUM' AND x.status != 'RESOLVED' AND v.at <= ?
@@ -80,13 +81,20 @@ export function runEscalationTimers(db: Db, at: Date) {
     )) {
       db.update('escalations', e.id, { recheck_requested_at: at });
       const nurse = e.shift_id ? db.get<{ nurse_id: number }>('SELECT nurse_id FROM shifts WHERE id = ?', e.shift_id)?.nurse_id : undefined;
-      notify(db, nurse ? `staff:${nurse}` : 'role:NURSE', 'PUSH', `Recheck vitals now (escalation #${e.id}): NEWS2 5-6 needs a repeat reading within ${NEWS2_RECHECK_MIN} min`);
+      notify(db, nurse ? `staff:${nurse}` : 'role:NURSE', 'PUSH', `Recheck vitals now (escalation #${e.id}): NEWS2 5-6 needs a repeat reading within ${cfg().news2RecheckMin} min`);
       recheck.push(e.id);
     }
-    const releaseCutoff = new Date(at.getTime() - RESULT_AUTO_RELEASE_H * 3600_000).toISOString();
-    db.run(`UPDATE results SET released_at = ? WHERE critical = 0 AND released_at IS NULL AND acknowledged_by IS NULL AND created_at <= ?`, iso, releaseCutoff);
+    // resultAutoReleaseH = 0 means results reach the patient only after the doctor reviews them.
+    const releaseCutoff = new Date(at.getTime() - cfg().resultAutoReleaseH * 3600_000).toISOString();
+    if (cfg().resultAutoReleaseH > 0) db.run(`UPDATE results SET released_at = ? WHERE critical = 0 AND released_at IS NULL AND acknowledged_by IS NULL AND created_at <= ?`, iso, releaseCutoff);
   });
   return { escalated, escalatedResults, recheck };
+}
+
+/** The episode doctor, or the configured on-call doctors when the episode has none. */
+function notifyDoctor(db: Db, doctorId: number | null, channel: 'CALL' | 'PUSH', message: string) {
+  const to = doctorId ? [`staff:${doctorId}`] : escalationRecipients('ONCALL_DOCTOR');
+  for (const r of to) notify(db, r, channel, message);
 }
 
 function nurseShift(db: Db, req: any): { shift: Row; staff: Row } {
@@ -235,8 +243,8 @@ export function clinicalRoutes(db: Db): Router {
       db.update('orders', o.id, { status: 'VALIDATED' });
       if (body.critical) {
         openEscalation(db, ep.id, 'CRITICAL_RESULT', 'CRITICAL', 'Doctor must acknowledge within 30 min', now(req), id);
-        notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'CALL', `CRITICAL result for ${ep.episode_no}`);
-      } else notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'PUSH', `Result ready for review (${ep.episode_no})`);
+        notifyDoctor(db, ep.doctor_id, 'CALL', `CRITICAL result for ${ep.episode_no}`);
+      } else notifyDoctor(db, ep.doctor_id, 'PUSH', `Result ready for review (${ep.episode_no})`);
       return { id, critical: body.critical };
     });
     res.status(201).json(out);
@@ -267,7 +275,12 @@ export function clinicalRoutes(db: Db): Router {
     const plan = db.get('SELECT * FROM care_plans WHERE episode_id = ? ORDER BY version DESC LIMIT 1', ep.id);
     if (!plan) throw new HttpError(409, 'The doctor has not approved a care plan yet');
     const start = new Date(body.start);
-    for (const id of body.nurseIds) assertStaffAvailable(db, id, ['NURSE'], start);
+    const warnings: string[] = [];
+    for (const id of body.nurseIds) {
+      const nurse = assertStaffAvailable(db, id, ['NURSE'], start);
+      const w = genderCheck(db, ep.patient_id, nurse);
+      if (w) warnings.push(w);
+    }
 
     const planned = buildRoster({ start, days: body.days ?? plan.duration_days, shiftHours: plan.shift_hours, hoursPerDay: plan.hours_per_day, nurseIds: body.nurseIds });
     for (const nurseId of new Set(body.nurseIds)) {
@@ -283,7 +296,7 @@ export function clinicalRoutes(db: Db): Router {
     }));
     for (const id of new Set(body.nurseIds)) notify(db, `staff:${id}`, 'PUSH', `Roster published for ${ep.episode_no}`);
     audit(db, staff.id, 'PUBLISH_ROSTER', 'episodes', ep.id, { shifts: ids.length });
-    res.status(201).json({ shifts: ids.length, ids });
+    res.status(201).json({ shifts: ids.length, ids, warnings });
   }));
 
   r.get('/shifts', wrap((req) => {
@@ -316,7 +329,9 @@ export function clinicalRoutes(db: Db): Router {
     const { nurseId, overrideReason } = z.object({ nurseId: z.number().int(), overrideReason: z.string().min(5).optional() }).parse(req.body);
     const shift = getOr404(db, 'shifts', req.params.id, 'Shift');
     if (!['PLANNED', 'LATE'].includes(shift.status)) throw new HttpError(409, `Shift is ${shift.status}`);
-    assertStaffAvailable(db, nurseId, ['NURSE'], now(req));
+    const backup = assertStaffAvailable(db, nurseId, ['NURSE'], now(req));
+    const ep0 = getOr404(db, 'episodes', shift.episode_id, 'Episode');
+    const warning = genderCheck(db, ep0.patient_id, backup);
     // A backup nurse coming off a night shift must still get the minimum rest (BR-33).
     assertWorkingTime(db, nurseId, [{ start: new Date(shift.planned_start), end: new Date(shift.planned_end) }], { by: staff, reason: overrideReason });
     return db.tx(() => {
@@ -324,7 +339,7 @@ export function clinicalRoutes(db: Db): Router {
       const id = db.insert('shifts', { episode_id: shift.episode_id, nurse_id: nurseId, planned_start: shift.planned_start, planned_end: shift.planned_end, replaced_shift_id: shift.id });
       db.run(`UPDATE escalations SET status = 'RESOLVED', acked_by = ?, closed_at = ? WHERE trigger = 'LATE_SHIFT' AND ref_id = ? AND status != 'RESOLVED'`, staff.id, now(req).toISOString(), shift.id);
       notify(db, `staff:${nurseId}`, 'CALL', `Urgent: cover shift ${id} now`);
-      return { newShiftId: id };
+      return { newShiftId: id, warnings: warning ? [warning] : [] };
     });
   }));
 
@@ -336,7 +351,7 @@ export function clinicalRoutes(db: Db): Router {
     const p = getOr404(db, 'patients', ep.patient_id);
     if (p.lat !== null) {
       const d = distanceMetres(body, { lat: p.lat, lng: p.lng });
-      if (d > CHECK_IN_RADIUS_M) throw new HttpError(400, `You are ${Math.round(d)} m from the patient address`);
+      if (d > cfg().checkInRadiusM) throw new HttpError(400, `You are ${Math.round(d)} m from the patient address`);
     }
     db.tx(() => {
       ensureConsent(db, p, 'NURSE', now(req), staff.id, body.consent); // BR-80
@@ -368,10 +383,10 @@ export function clinicalRoutes(db: Db): Router {
         escalationId = openEscalation(db, ep.id, 'NEWS2', score.band, score.action, now(req), id);
         if (score.band === 'HIGH') {
           db.update('episodes', ep.id, { status: 'ON_HOLD' });
-          notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'CALL', `NEWS2 ${score.total} for ${ep.episode_no}: ambulance called`);
+          notifyDoctor(db, ep.doctor_id, 'CALL', `NEWS2 ${score.total} for ${ep.episode_no}: ambulance called`);
           notify(db, `patient:${ep.patient_id}`, 'CALL', 'Emergency: family informed, ambulance on the way');
         } else {
-          notify(db, 'role:ONCALL_DOCTOR', 'CALL', `NEWS2 ${score.total} (${score.band}) for ${ep.episode_no}`);
+          for (const rcpt of escalationRecipients('ONCALL_DOCTOR')) notify(db, rcpt, 'CALL', `NEWS2 ${score.total} (${score.band}) for ${ep.episode_no}`);
         }
       }
       return { id, news2: score, escalationId };

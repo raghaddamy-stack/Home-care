@@ -22,7 +22,7 @@ export function previousPeriod(cycle: Exclude<BillingCycle, 'PER_VISIT'>, asOf: 
 }
 
 export interface BillableSource {
-  sourceType: 'SHIFT' | 'VISIT' | 'RENTAL' | 'SUPPLY';
+  sourceType: 'SHIFT' | 'SHIFT_PLANNED' | 'SHIFT_ADJUST' | 'VISIT' | 'RENTAL' | 'SUPPLY';
   sourceId: number;
   description: string;
   qty: number;
@@ -48,4 +48,13 @@ export function rentalDaysInPeriod(start: Date, end: Date | null, p: Period): nu
   const from = Math.max(start.getTime(), p.from.getTime());
   const to = Math.min((end ?? p.to).getTime(), p.to.getTime());
   return Math.max(0, Math.ceil((to - from) / 86_400_000));
+}
+
+/** The period right after `p` (same cycle), used when nursing is billed in advance. */
+export function nextPeriod(cycle: Exclude<BillingCycle, 'PER_VISIT'>, p: Period): Period {
+  const from = p.to;
+  const to = cycle === 'MONTHLY'
+    ? new Date(from.getFullYear(), from.getMonth() + 1, 1)
+    : new Date(from.getFullYear(), from.getMonth(), from.getDate() + 7);
+  return { from, to };
 }

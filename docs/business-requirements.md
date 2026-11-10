@@ -205,6 +205,8 @@ Device after return: Cleaning → Maintenance (if due) → Available
 
 ## 5. Business Rules (Defaults are configurable per contract or zone)
 
+> All numeric limits and policy choices in this section are now owner settings (screen **إعدادات المالك**, `backend/src/settings.ts`). The values below are the shipped defaults; the owner's choices override them.
+
 ### 5.1 Intake and Patient Data
 | ID | Rule | Default |
 |---|---|---|

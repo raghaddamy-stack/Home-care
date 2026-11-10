@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response, RequestHandler } from 'express';
 import { ZodError } from 'zod';
 import { TransitionError } from './domain/requestStatus.js';
+import { SettingsError } from './settings.js';
 import type { Db, Row } from './db.js';
 
 export class HttpError extends Error {
@@ -25,6 +26,7 @@ export function wrap(fn: (req: Request, res: Response) => unknown): RequestHandl
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (err instanceof ZodError) return res.status(400).json({ error: 'Invalid input', issues: err.issues });
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err instanceof SettingsError) return res.status(400).json({ error: err.message });
   if (err instanceof TransitionError) return res.status(409).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Internal error' });

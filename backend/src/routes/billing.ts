@@ -2,9 +2,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
-import { buildInvoiceLines, previousPeriod, rentalDaysInPeriod, type BillableSource, type Period } from '../domain/billing.js';
+import { buildInvoiceLines, nextPeriod, previousPeriod, rentalDaysInPeriod, type BillableSource, type Period } from '../domain/billing.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { createInvoice } from './visits.js';
+import { cfg } from '../settings.js';
 
 function unitPrice(db: Db, code: string, payerId: number | null): number {
   const row = db.get(
@@ -16,8 +17,14 @@ function unitPrice(db: Db, code: string, payerId: number | null): number {
   return row.unit_price;
 }
 
-/** Collect billable items of an episode inside a period and create one invoice (or null if nothing to bill). */
-export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC' | 'FINAL'): number | null {
+/**
+ * Collect billable items of an episode and create one invoice (or null if nothing to bill):
+ * - completed shifts of `period` not billed yet, at actual attendance;
+ * - adjustments for shifts that were billed in advance and have now finished (actual − planned, or a credit if missed);
+ * - with `advance`, the planned shifts of that coming period (owner setting nursingBillingMode = ADVANCE);
+ * - device rental days inside `period`.
+ */
+export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC' | 'FINAL', advance?: Period): number | null {
   const policy = ep.policy_id ? db.get('SELECT * FROM insurance_policies WHERE id = ?', ep.policy_id) : undefined;
   const payerId = policy?.payer_id ?? null;
   const code = ep.shift_service_code ?? 'NRS-HOUR';
@@ -32,6 +39,30 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
     sourceType: 'SHIFT', sourceId: s.id, qty: s.billable_minutes / 60, unitPrice: hourly,
     description: `Nursing ${s.planned_start.slice(0, 16).replace('T', ' ')} (${s.billable_minutes / 60} h)`,
   }));
+  const fmt = (iso: string) => iso.slice(0, 16).replace('T', ' ');
+  // Settle shifts billed in advance once they are over.
+  const settleBefore = kind === 'FINAL' ? '9999' : period.to.toISOString();
+  const toSettle = db.all(
+    `SELECT * FROM shifts WHERE episode_id = ? AND advance_minutes IS NOT NULL AND adjusted_at IS NULL
+     AND status IN ('COMPLETED','MISSED','CANCELLED') AND planned_start < ?`,
+    ep.id, settleBefore,
+  );
+  for (const sh of toSettle) {
+    const diff = (sh.status === 'COMPLETED' ? sh.billable_minutes : 0) - sh.advance_minutes;
+    if (diff !== 0) sources.push({
+      sourceType: 'SHIFT_ADJUST', sourceId: sh.id, qty: diff / 60, unitPrice: hourly,
+      description: `Adjustment ${fmt(sh.planned_start)}: ${sh.status === 'COMPLETED' ? `actual ${sh.billable_minutes / 60} h` : 'not delivered'} vs ${sh.advance_minutes / 60} h billed in advance`,
+    });
+  }
+  const planned = advance ? db.all(
+    `SELECT * FROM shifts WHERE episode_id = ? AND invoice_id IS NULL AND status IN ('PLANNED','LATE','CHECKED_IN','COMPLETED')
+     AND planned_start >= ? AND planned_start < ?`,
+    ep.id, advance.from.toISOString(), advance.to.toISOString(),
+  ) : [];
+  for (const sh of planned) {
+    const mins = (new Date(sh.planned_end).getTime() - new Date(sh.planned_start).getTime()) / 60_000;
+    sources.push({ sourceType: 'SHIFT_PLANNED', sourceId: sh.id, qty: mins / 60, unitPrice: hourly, description: `Nursing (planned) ${fmt(sh.planned_start)} (${mins / 60} h)` });
+  }
   for (const rent of db.all(`SELECT * FROM rentals WHERE episode_id = ?`, ep.id)) {
     const days = rentalDaysInPeriod(new Date(rent.start_date), rent.returned_at ? new Date(rent.returned_at) : null, period);
     if (days > 0) sources.push({ sourceType: 'RENTAL', sourceId: rent.id, qty: days, unitPrice: rent.daily_rate, description: `${rent.service_code} rental (${days} days)` });
@@ -40,8 +71,15 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
 
   const covered: string[] = policy ? JSON.parse(policy.covered_codes) : [];
   const copay = policy && covered.includes(code) ? policy.copay_pct : null;
-  const invoiceId = createInvoice(db, { patient_id: ep.patient_id, episode_id: ep.id, kind, period_from: period.from, period_to: period.to }, buildInvoiceLines(sources, copay));
+  const shown = advance ?? period;
+  const invoiceId = createInvoice(db, { patient_id: ep.patient_id, episode_id: ep.id, kind, period_from: shown.from, period_to: shown.to }, buildInvoiceLines(sources, copay));
   for (const s of shifts) db.update('shifts', s.id, { invoice_id: invoiceId });
+  const nowIso = new Date().toISOString();
+  for (const s of toSettle) db.update('shifts', s.id, { adjusted_at: nowIso });
+  for (const s of planned) {
+    const mins = (new Date(s.planned_end).getTime() - new Date(s.planned_start).getTime()) / 60_000;
+    db.update('shifts', s.id, { invoice_id: invoiceId, advance_minutes: mins });
+  }
   return invoiceId;
 }
 
@@ -61,9 +99,12 @@ export function billingRoutes(db: Db): Router {
     db.tx(() => {
       for (const ep of episodes) {
         const period = previousPeriod(ep.billing_cycle, asOf);
-        const exists = db.get('SELECT id FROM invoices WHERE episode_id = ? AND period_from = ?', ep.id, period.from.toISOString());
+        // ADVANCE: bill the coming period's roster now; actual attendance is settled on the next run.
+        const advance = cfg().nursingBillingMode === 'ADVANCE' && ep.status !== 'DISCHARGED' ? nextPeriod(ep.billing_cycle, period) : undefined;
+        const key = (advance ?? period).from.toISOString();
+        const exists = db.get('SELECT id FROM invoices WHERE episode_id = ? AND period_from = ?', ep.id, key);
         if (exists) continue;
-        const id = invoiceEpisode(db, ep, period, 'PERIODIC');
+        const id = invoiceEpisode(db, ep, period, 'PERIODIC', advance);
         if (id) created.push(id);
       }
     });

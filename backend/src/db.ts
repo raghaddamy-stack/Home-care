@@ -37,6 +37,10 @@ export class Db {
     // BR-23 cancellation fee and BR-24 no-show tracking on the visit.
     add('visits', 'cancelled_at', 'TEXT');
     add('visits', 'cancel_fee', 'INTEGER');
+    // Owner settings: gender preference and nursing billed in advance.
+    add('patients', 'preferred_staff_gender', "TEXT CHECK (preferred_staff_gender IN ('M','F'))");
+    add('shifts', 'advance_minutes', 'INTEGER');
+    add('shifts', 'adjusted_at', 'TEXT');
   }
 
   get<T = Row>(sql: string, ...params: SQLInputValue[]): T | undefined {

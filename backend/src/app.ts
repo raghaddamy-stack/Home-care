@@ -10,8 +10,11 @@ import { patientAppRoutes } from './routes/patientApp.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { feedbackRoutes } from './routes/feedback.js';
 import { consentRoutes } from './routes/consent.js';
+import { settingsRoutes } from './routes/settings.js';
+import { loadSettings } from './settings.js';
 
 export function createApp(db: Db) {
+  loadSettings(db);
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   app.get('/health', (_req, res) => res.json({ ok: true }));
@@ -23,6 +26,7 @@ export function createApp(db: Db) {
   app.use('/api', patientAppRoutes(db));
   app.use('/api', dashboardRoutes(db), feedbackRoutes(db));
   app.use('/api', consentRoutes(db));
+  app.use('/api', settingsRoutes(db));
   app.use(errorHandler);
   return app;
 }

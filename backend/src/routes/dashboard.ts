@@ -3,19 +3,20 @@
 import { Router } from 'express';
 import type { Db } from '../db.js';
 import { now, requireRole, wrap } from '../http.js';
+import { cfg } from '../settings.js';
 
-/** Minutes a request may sit in a status before it counts as late. */
-export const SLA_MINUTES = {
-  /** App/call request reviewed and priced by a coordinator (BRD §7.1: ≤ 30 min). */
-  review: 30,
-  /** Pre-approval followed up every 4 h. */
-  preapproval: 4 * 60,
-  /** Quote sent and not answered: call the patient after 24 h. */
-  quote: 24 * 60,
-  /** Accepted → staff assigned: same-day / urgent within 3 h, routine within 24 h. */
-  scheduleUrgent: 3 * 60,
-  scheduleRoutine: 24 * 60,
-} as const;
+/** UTC offset of the configured time zone at `at`. */
+function tzOffsetMs(at: Date): number {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: cfg().timezone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(at).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return asUtc - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/** SLA targets (minutes) from owner settings. */
+export const slaMinutes = () => {
+  const s = cfg();
+  return { review: s.slaReviewMin, preapproval: s.slaPreapprovalMin, quote: s.slaQuoteMin, scheduleUrgent: s.slaScheduleUrgentMin, scheduleRoutine: s.slaScheduleRoutineMin };
+};
 
 export type SlaKind = 'review' | 'preapproval' | 'quote' | 'schedule';
 
@@ -24,22 +25,22 @@ export function slaFor(status: string, urgency: string): { kind: SlaKind; minute
   switch (status) {
     case 'SUBMITTED':
     case 'UNDER_REVIEW':
-      return { kind: 'review', minutes: SLA_MINUTES.review };
+      return { kind: 'review', minutes: slaMinutes().review };
     case 'PENDING_PREAPPROVAL':
-      return { kind: 'preapproval', minutes: SLA_MINUTES.preapproval };
+      return { kind: 'preapproval', minutes: slaMinutes().preapproval };
     case 'QUOTED':
-      return { kind: 'quote', minutes: SLA_MINUTES.quote };
+      return { kind: 'quote', minutes: slaMinutes().quote };
     case 'ACCEPTED':
     case 'NO_SHOW':
-      return { kind: 'schedule', minutes: urgency === 'ROUTINE' ? SLA_MINUTES.scheduleRoutine : SLA_MINUTES.scheduleUrgent };
+      return { kind: 'schedule', minutes: urgency === 'ROUTINE' ? slaMinutes().scheduleRoutine : slaMinutes().scheduleUrgent };
     default:
       return null;
   }
 }
 
-/** Jordan is UTC+3 all year (no DST since 2022). Returns [start, end) of the local day as ISO strings. */
+/** [start, end) of the local business day (owner time zone, Amman by default) as ISO strings. */
 export function ammanDay(at: Date): [string, string] {
-  const OFFSET = 3 * 3600_000;
+  const OFFSET = tzOffsetMs(at);
   const local = new Date(at.getTime() + OFFSET);
   const start = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - OFFSET;
   return [new Date(start).toISOString(), new Date(start + 86_400_000).toISOString()];

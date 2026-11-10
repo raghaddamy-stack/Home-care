@@ -1,8 +1,9 @@
 // Dispatch, check-in, no-show and completion of direct (outpatient) services.
 import { Router } from 'express';
 import { z } from 'zod';
+import { cfg } from '../settings.js';
 import type { Db, Row } from '../db.js';
-import { CHECK_IN_RADIUS_M, distanceMetres } from '../domain/shifts.js';
+import { distanceMetres } from '../domain/shifts.js';
 import { buildInvoiceLines } from '../domain/billing.js';
 import { noShowFee, prepaymentRequired } from '../domain/patientPolicy.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
@@ -83,7 +84,7 @@ export function visitRoutes(db: Db): Router {
       method = 'OTP';
     } else if (body.lat !== undefined && body.lng !== undefined && patient.lat !== null) {
       const d = distanceMetres({ lat: body.lat, lng: body.lng }, { lat: patient.lat, lng: patient.lng });
-      if (d > CHECK_IN_RADIUS_M) throw new HttpError(400, `You are ${Math.round(d)} m from the patient address`);
+      if (d > cfg().checkInRadiusM) throw new HttpError(400, `You are ${Math.round(d)} m from the patient address`);
       method = 'GPS';
     } else throw new HttpError(400, 'Send the visit code or GPS position');
     return db.tx(() => {

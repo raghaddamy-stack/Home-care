@@ -1,3 +1,4 @@
+import { cfg } from '../settings.js';
 // Escalation response timers (BRD §5.5). When the first responder has not acknowledged
 // before the deadline, the escalation moves up to the next level.
 
@@ -8,21 +9,17 @@ export interface EscalationTimer {
   escalateTo: 'MEDICAL_DIRECTOR' | 'SUPERVISOR';
 }
 
-/** Critical result: phone the doctor within 30 min of validation, else the medical director. */
-export const CRITICAL_RESULT_ACK_MIN = 30;
-/** NEWS2 5–6: recheck vitals within 15 min. */
-export const NEWS2_RECHECK_MIN = 15;
-/** Non-critical results are released to the patient app after doctor review or after 24 h. */
-export const RESULT_AUTO_RELEASE_H = 24;
+// Response times come from owner settings (criticalResultAckMin, news2MediumResponseMin,
+// news2LowMediumResponseMin, checkInGraceMin); recipients from medicalDirectorId / onCallDoctorIds.
 
 export function timerFor(trigger: string, level: string): EscalationTimer | null {
-  if (trigger === 'CRITICAL_RESULT') return { responseMin: CRITICAL_RESULT_ACK_MIN, escalateTo: 'MEDICAL_DIRECTOR' };
-  if (trigger === 'NEWS2' && level === 'MEDIUM') return { responseMin: 15, escalateTo: 'MEDICAL_DIRECTOR' };
-  if (trigger === 'NEWS2' && level === 'LOW_MEDIUM') return { responseMin: 30, escalateTo: 'MEDICAL_DIRECTOR' };
+  if (trigger === 'CRITICAL_RESULT') return { responseMin: cfg().criticalResultAckMin, escalateTo: 'MEDICAL_DIRECTOR' };
+  if (trigger === 'NEWS2' && level === 'MEDIUM') return { responseMin: cfg().news2MediumResponseMin, escalateTo: 'MEDICAL_DIRECTOR' };
+  if (trigger === 'NEWS2' && level === 'LOW_MEDIUM') return { responseMin: cfg().news2LowMediumResponseMin, escalateTo: 'MEDICAL_DIRECTOR' };
   // HIGH: the medical director is notified at once (no waiting period).
   if (trigger === 'NEWS2' && level === 'HIGH') return { responseMin: 0, escalateTo: 'MEDICAL_DIRECTOR' };
   // BR-30: no ETA 15 min after the late alert → nursing supervisor.
-  if (trigger === 'LATE_SHIFT') return { responseMin: 15, escalateTo: 'SUPERVISOR' };
+  if (trigger === 'LATE_SHIFT') return { responseMin: cfg().checkInGraceMin, escalateTo: 'SUPERVISOR' };
   return null;
 }
 

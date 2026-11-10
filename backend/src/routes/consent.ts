@@ -1,6 +1,7 @@
 // Consent register (BR-80, BR-03). General consent to home treatment is a hard stop before the first visit.
 import { Router } from 'express';
 import { z } from 'zod';
+import { cfg } from '../settings.js';
 import type { Db, Row } from '../db.js';
 import {
   CONSENT_METHODS, CONSENT_TYPES, consentsNeededFor, hasValidConsent, SIGNER_RELATIONS, signerError,
@@ -43,6 +44,7 @@ export function missingConsents(db: Db, patientId: number, needed: ConsentType[]
  * (`consent` in the body); otherwise a missing consent refuses the check-in.
  */
 export function ensureConsent(db: Db, patient: Row, visitKind: string, at: Date, staffId: number, inline?: z.infer<typeof ConsentInput>) {
+  if (!cfg().requireConsent) return; // owner turned the hard stop off
   const needed = consentsNeededFor(visitKind);
   let missing = missingConsents(db, patient.id, needed, at);
   if (missing.length && inline) {

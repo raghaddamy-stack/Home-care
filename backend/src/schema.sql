@@ -386,3 +386,20 @@ CREATE TABLE IF NOT EXISTS prepayments (
   applied_invoice_id INTEGER REFERENCES invoices(id),
   at TEXT NOT NULL
 );
+
+-- Owner-configurable settings (src/settings.ts holds the defaults and validation).
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,                        -- JSON
+  updated_by INTEGER REFERENCES staff(id),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings_history (
+  id INTEGER PRIMARY KEY,
+  key TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT NOT NULL,
+  changed_by INTEGER REFERENCES staff(id),
+  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

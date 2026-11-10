@@ -252,3 +252,23 @@ button.kpi:hover { border-color: var(--accent); }
 .stars { color: var(--warn); letter-spacing: 2px; white-space: nowrap; }
 .stars .muted { color: var(--line-strong); }
 .fb-item { gap: 6px; }
+
+/* Owner settings */
+.settings { display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .settings { grid-template-columns: minmax(0, 1fr); } }
+.settings-nav { display: grid; gap: 4px; position: sticky; top: 76px; }
+@media (max-width: 1100px) { .settings-nav { position: static; display: flex; overflow-x: auto; } }
+.settings-nav button { display: flex; justify-content: space-between; gap: 8px; text-align: start; background: transparent; color: var(--muted); }
+.settings-nav button.on { background: var(--accent-soft); color: var(--accent); }
+.settings-list { display: grid; }
+.setting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 16px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.setting:last-child { border-bottom: 0; }
+.setting.dirty { background: linear-gradient(to left, var(--warn-soft), transparent 40%); }
+@media (max-width: 640px) { .setting { grid-template-columns: minmax(0, 1fr); } }
+.setting-text { display: grid; gap: 2px; min-width: 0; }
+.setting-control { min-width: 0; }
+.unit-input { display: flex; align-items: center; gap: 8px; }
+.unit-input span { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.settings-side { position: sticky; top: 76px; }
+@media (max-width: 1100px) { .settings-side { position: static; } }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }

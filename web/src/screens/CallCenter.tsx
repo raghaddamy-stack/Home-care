@@ -5,9 +5,9 @@ import { Empty, Field, Pill, useAction, useLoad } from '../ui';
 
 interface PatientForm {
   nationalId: string; fullName: string; dob: string; gender: '' | 'M' | 'F'; phone: string;
-  address: string; lat: string; lng: string; emergencyContact: string;
+  address: string; lat: string; lng: string; emergencyContact: string; preferredStaffGender: '' | 'M' | 'F';
 }
-const blank: PatientForm = { nationalId: '', fullName: '', dob: '', gender: '', phone: '', address: '', lat: '', lng: '', emergencyContact: '' };
+const blank: PatientForm = { nationalId: '', fullName: '', dob: '', gender: '', phone: '', address: '', lat: '', lng: '', emergencyContact: '', preferredStaffGender: '' };
 
 function patientPayload(p: PatientForm) {
   const out: Record<string, unknown> = { nationalId: p.nationalId.trim(), fullName: p.fullName.trim() };
@@ -17,6 +17,7 @@ function patientPayload(p: PatientForm) {
   if (p.address) out.address = p.address;
   if (p.lat && p.lng) { out.lat = Number(p.lat); out.lng = Number(p.lng); }
   if (p.emergencyContact) out.emergencyContact = p.emergencyContact;
+  out.preferredStaffGender = p.preferredStaffGender || null;
   return out;
 }
 
@@ -31,6 +32,9 @@ function PatientFields({ p, set }: { p: PatientForm; set: (p: PatientForm) => vo
       </Field>
       <Field label="الهاتف"><input id="pf-phone" inputMode="tel" {...f('phone')} /></Field>
       <Field label="جهة اتصال للطوارئ"><input id="pf-emg" {...f('emergencyContact')} /></Field>
+      <Field label="تفضيل جنس الكادر">
+        <select id="pf-pref" {...f('preferredStaffGender')}><option value="">بدون تفضيل</option><option value="F">أنثى</option><option value="M">ذكر</option></select>
+      </Field>
       <Field label="العنوان"><input id="pf-addr" {...f('address')} placeholder="المدينة، الحي، العمارة" /></Field>
       <Field label="خط العرض (GPS)"><input id="pf-lat" inputMode="decimal" {...f('lat')} placeholder="31.95" /></Field>
       <Field label="خط الطول (GPS)" hint="من رابط الموقع اللي بيبعته المريض"><input id="pf-lng" inputMode="decimal" {...f('lng')} placeholder="35.91" /></Field>
@@ -68,7 +72,7 @@ function NewRequest({ onCreated }: { onCreated: () => void }) {
       const x = await api.get<any>(`/patients?nationalId=${encodeURIComponent(p.nationalId.trim())}`);
       setP({
         nationalId: x.national_id, fullName: x.full_name ?? '', dob: x.dob ?? '', gender: x.gender ?? '', phone: x.phone ?? '',
-        address: x.address ?? '', lat: x.lat?.toString() ?? '', lng: x.lng?.toString() ?? '', emergencyContact: x.emergency_contact ?? '',
+        address: x.address ?? '', lat: x.lat?.toString() ?? '', lng: x.lng?.toString() ?? '', emergencyContact: x.emergency_contact ?? '', preferredStaffGender: x.preferred_staff_gender ?? '',
       });
       setFound('existing');
     } catch (e) {
@@ -181,7 +185,7 @@ function PendingInfo({ tick }: { tick: number }) {
 
   const start = async (r: RequestRow) => {
     const x = await api.get<any>(`/patients/${r.patient_id}`);
-    setP({ nationalId: x.national_id, fullName: x.full_name, dob: x.dob ?? '', gender: x.gender ?? '', phone: x.phone ?? '', address: x.address ?? '', lat: x.lat?.toString() ?? '', lng: x.lng?.toString() ?? '', emergencyContact: x.emergency_contact ?? '' });
+    setP({ nationalId: x.national_id, fullName: x.full_name, dob: x.dob ?? '', gender: x.gender ?? '', phone: x.phone ?? '', address: x.address ?? '', lat: x.lat?.toString() ?? '', lng: x.lng?.toString() ?? '', emergencyContact: x.emergency_contact ?? '', preferredStaffGender: x.preferred_staff_gender ?? '' });
     setRx('');
     setOpen(r.id);
   };

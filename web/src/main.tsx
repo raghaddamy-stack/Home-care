@@ -6,16 +6,18 @@ import { CallCenter } from './screens/CallCenter';
 import { Coordinator } from './screens/Coordinator';
 import { FieldApp } from './screens/FieldApp';
 import { Finance } from './screens/Finance';
+import { Settings } from './screens/Settings';
 import { loadPatientToken, PatientApp } from './screens/PatientApp';
 import './styles.css';
 
-type View = 'board' | 'intake' | 'field' | 'finance';
+type View = 'board' | 'intake' | 'field' | 'finance' | 'settings';
 
 const VIEWS: Record<View, { label: string; roles: string[] }> = {
   board: { label: 'لوحة المنسق', roles: ['COORDINATOR', 'SUPERVISOR', 'ADMIN'] },
   intake: { label: 'الكول سنتر', roles: ['AGENT', 'COORDINATOR', 'ADMIN'] },
   field: { label: 'تطبيق الكادر', roles: ['NURSE', 'DOCTOR', 'LAB_TECH', 'RADIOGRAPHER', 'DRIVER'] },
   finance: { label: 'المالية', roles: ['FINANCE', 'ADMIN'] },
+  settings: { label: 'إعدادات المالك', roles: ['ADMIN'] },
 };
 
 function Login({ onPick, onPatient }: { onPick: (s: Staff) => void; onPatient: () => void }) {
@@ -82,6 +84,7 @@ function App() {
         {view === 'intake' && <CallCenter me={me} />}
         {view === 'field' && <FieldApp me={me} />}
         {view === 'finance' && <Finance />}
+        {view === 'settings' && <Settings />}
       </main>
     </div>
   );
