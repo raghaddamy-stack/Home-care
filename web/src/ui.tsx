@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { STATUS_AR } from './api';
+import { Icon } from './icons';
 
 const TONE: Record<string, string> = {
   PENDING_INFO: 'warn', PENDING_PREAPPROVAL: 'warn', EXPIRED: 'warn', NO_SHOW: 'bad', CANCELLED: 'mute', REFERRED_OUT: 'mute',
@@ -35,7 +36,7 @@ export function Drawer({ open, onClose, title, children }: { open: boolean; onCl
       <aside className="drawer" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <header className="drawer-head">
           <h2>{title}</h2>
-          <button className="ghost" onClick={onClose} aria-label="إغلاق">✕</button>
+          <button className="ghost icon-btn" onClick={onClose} aria-label="إغلاق"><Icon name="x" /></button>
         </header>
         <div className="drawer-body">{children}</div>
       </aside>
@@ -43,8 +44,26 @@ export function Drawer({ open, onClose, title, children }: { open: boolean; onCl
   );
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <div className="empty">{children}</div>;
+/** Friendly empty state: optional icon + title, a line of text, and the next action. */
+export function Empty({ children, icon, title, action, compact }: { children?: ReactNode; icon?: string; title?: string; action?: ReactNode; compact?: boolean }) {
+  return (
+    <div className={`empty${compact ? ' compact' : ''}`}>
+      {icon && <Icon name={icon} />}
+      {title && <strong>{title}</strong>}
+      {children && <span>{children}</span>}
+      {action}
+    </div>
+  );
+}
+
+/** Skeleton placeholder while data loads. */
+export function Loading({ label = 'جاري التحميل…', card }: { label?: string; card?: boolean }) {
+  return (
+    <div className={`skeleton${card ? ' cardish' : ''}`} role="status" aria-live="polite">
+      <span className="sr-only">{label}</span>
+      <i /><i /><i /><i />
+    </div>
+  );
 }
 
 // ---- Toasts -----------------------------------------------------------------
@@ -63,7 +82,7 @@ export function ToastHost({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={push}>
       {children}
       <div className="toasts" aria-live="polite">
-        {items.map((t) => <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>)}
+        {items.map((t) => <div key={t.id} className={`toast ${t.kind}`} role={t.kind === 'err' ? 'alert' : 'status'}><Icon name={t.kind === 'ok' ? 'check' : 'alert'} /><span>{t.text}</span></div>)}
       </div>
     </ToastCtx.Provider>
   );

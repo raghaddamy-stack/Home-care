@@ -1,8 +1,8 @@
 // Coordinator board header: today's queues, SLA breaches, field activity and patient satisfaction.
 import { useState } from 'react';
-import { api, fmtTime } from '../api';
+import { api, fmtTime, staffName } from '../api';
 import { ageAr } from '../live';
-import { Drawer, Empty, Field, useAction, useLoad } from '../ui';
+import { Drawer, Empty, Field, Loading, useAction, useLoad } from '../ui';
 
 export interface Dashboard {
   asOf: string;
@@ -80,7 +80,7 @@ function FeedbackDrawer({ onClose }: { onClose: () => void }) {
       <div className="list-row">
         <div>
           <strong>{f.full_name}</strong> <span className="mono muted small">{f.request_no}</span>
-          <div className="small muted">{f.staff_name ?? '—'} · {fmtTime(f.created_at)}</div>
+          <div className="small muted">{f.staff_name ? staffName(f.staff_name) : '—'} · {fmtTime(f.created_at)}</div>
         </div>
         <span className={`stars s${f.score}`} aria-label={`${f.score} من 5`}>{'★'.repeat(f.score)}<span className="muted">{'★'.repeat(5 - f.score)}</span></span>
       </div>
@@ -96,7 +96,8 @@ function FeedbackDrawer({ onClose }: { onClose: () => void }) {
         <section className="action">
           <h3>بدها اتصال ({open.length})</h3>
           <p className="muted small">أي تقييم 2 من 5 أو أقل. اتصل بالمريض، سجّل شو صار، وسكّر المتابعة.</p>
-          {!open.length && <Empty>ما في تقييمات منخفضة مفتوحة.</Empty>}
+          {!list.data && <Loading />}
+          {list.data && !open.length && <Empty icon="check" compact>ما في تقييمات منخفضة مفتوحة.</Empty>}
           <ul className="list">
             {open.map((f) => (
               <li key={f.id} className="stack">
@@ -114,7 +115,7 @@ function FeedbackDrawer({ onClose }: { onClose: () => void }) {
         </section>
         <section className="action">
           <h3>آخر التقييمات</h3>
-          {!rest.length && <Empty>لسا ما وصل تقييمات.</Empty>}
+          {list.data && !rest.length && <Empty icon="star" compact>لسا ما وصل تقييمات.</Empty>}
           <ul className="list">{rest.map((f) => <li key={f.id}><Item f={f} /></li>)}</ul>
         </section>
       </div>

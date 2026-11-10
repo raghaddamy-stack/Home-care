@@ -1,7 +1,8 @@
 // Patient app (mobile): sign in by SMS code, book a service, approve the price, track the visit, see results and invoices.
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmtTime, isoToLocal, jod, localToIso, setPatientToken, type Service } from '../api';
-import { Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { api, fmtTime, isoToLocal, jod, localToIso, setPatientToken, staffName, type Service } from '../api';
+import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
+import { Icon, Logo } from '../icons';
 import { LiveStamp, usePolling, useUpdatedAt } from '../live';
 import { RatePrompts } from './PatientFeedback';
 import { InvoiceDoc } from '../InvoiceDoc';
@@ -35,24 +36,27 @@ function SignIn({ onDone, onBack }: { onDone: () => void; onBack: () => void }) 
   });
 
   return (
-    <main className="login">
-      <div className="login-card">
-        <span className="eyebrow">Home Care · للمرضى</span>
-        <h1>رعاية</h1>
+    <main className="auth">
+      <div className="auth-card">
+        <header>
+          <div className="brand"><Logo size={40} /><div className="brand-text"><span className="brand-name">رعاية</span><span className="brand-sub">للمرضى وعائلاتهم</span></div></div>
+          <div className="auth-steps" aria-hidden="true"><i className="on" /><i className={sent ? 'on' : ''} /></div>
+          <h1>{sent ? 'أدخل رمز التحقق' : 'أهلاً فيك'}</h1>
+          <p className="lead">{sent ? `بعتنالك رمز من 6 أرقام برسالة على ${phone}.` : 'خدمات طبية لعندك عالبيت: فحوصات، أشعة، أجهزة، تمريض وزيارات طبيب.'}</p>
+        </header>
         {!sent ? (
           <form className="stack" onSubmit={(e) => { e.preventDefault(); ask(); }}>
-            <p className="muted">خدمات طبية لعندك عالبيت: فحوصات، أشعة، أجهزة، تمريض وزيارات طبيب.</p>
             <Field label="الرقم الوطني"><input id="p-nid" inputMode="numeric" value={nid} onChange={(e) => setNid(e.target.value)} required /></Field>
             <Field label="رقم الموبايل"><input id="p-phone" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XXXXXXXX" required /></Field>
             {needsName && <Field label="الاسم الكامل" hint="أول مرة؟ رح نفتحلك ملف"><input id="p-name" value={name} onChange={(e) => setName(e.target.value)} required /></Field>}
             <button className="primary block" disabled={busy}>أرسل رمز التحقق</button>
-            <button type="button" className="ghost" onClick={onBack}>دخول الموظفين</button>
+            <p className="trust"><Icon name="shield" size={16} />بياناتك الطبية محفوظة وما بنشاركها مع حدا.</p>
+            <button type="button" className="ghost" onClick={onBack}>رجوع · دخول الموظفين</button>
           </form>
         ) : (
           <form className="stack" onSubmit={(e) => { e.preventDefault(); verify(); }}>
-            <p className="muted">بعتنالك رمز من 6 أرقام على {phone}.</p>
             {sent.devCode && <div className="notice warn">نسخة تجريبية بدون SMS: الرمز <strong className="mono">{sent.devCode}</strong></div>}
-            <Field label="الرمز"><input id="p-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} required /></Field>
+            <Field label="الرمز"><input id="p-code" className="code-input" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} required /></Field>
             <button className="primary block" disabled={busy || code.length !== 6}>دخول</button>
             <button type="button" className="ghost" onClick={() => { setSent(null); setCode(''); }}>تغيير الرقم</button>
           </form>
@@ -75,6 +79,11 @@ const PATIENT_STATUS: Record<string, string> = {
   EXPIRED: 'انتهت صلاحية عرض السعر، المنسق رح يبعتلك سعر محدّث', CANCELLED: 'ملغي', NO_SHOW: 'ما لقيناك بالبيت، رح نتواصل معك لموعد جديد',
 };
 
+const STATUS_IC: Record<string, string> = {
+  PENDING_INFO: 'alert', QUOTED: 'receipt', EXPIRED: 'alert', ACCEPTED: 'calendar', SCHEDULED: 'calendar', DISPATCHED: 'send', IN_PROGRESS: 'heart',
+  COMPLETED: 'check', CONVERTED_TO_EPISODE: 'heart', NO_SHOW: 'alert', CANCELLED: 'x',
+};
+
 function Stepper({ status }: { status: string }) {
   if (status === 'CANCELLED') return null;
   const at = STEP_OF[status] ?? 0;
@@ -94,18 +103,19 @@ function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goP
   return (
     <li className="visit">
       <div className="visit-head">
-        <div>
+        <div className="req-title">
           <strong>{r.items.map((i: any) => i.name_ar).join('، ')}</strong>
           <div className="small muted"><span className="mono">{r.requestNo}</span> · {fmtTime(r.createdAt)}</div>
         </div>
         {r.status === 'CANCELLED' && <Pill status="CANCELLED" />}
       </div>
       <Stepper status={r.status} />
-      <p className="status-line">{PATIENT_STATUS[r.status] ?? r.status}</p>
+      <p className="status-line"><Icon name={STATUS_IC[r.status] ?? 'clock'} />{PATIENT_STATUS[r.status] ?? r.status}</p>
 
       {r.status === 'PENDING_INFO' && (
         <div className="notice warn">
-          ناقص: {r.missing.map((m: string) => MISSING_AR[m] ?? m).join('، ')}
+          <span>ناقص: {r.missing.map((m: string) => MISSING_AR[m] ?? m).join('، ')}
+</span>
           {r.missing.some((m: string) => m !== 'prescription') && <button className="secondary" onClick={goProfile}>أكمل ملفي</button>}
           {r.missing.includes('prescription') && <span className="small">ابعتلنا صورة الوصفة على الواتساب أو أعطيها للمنسق لما يتصل فيك.</span>}
         </div>
@@ -128,7 +138,7 @@ function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goP
           )}
           {r.status === 'QUOTED' && !declining && (
             <div className="grid-2">
-              <button className="primary" disabled={busy} onClick={() => run(async () => { await api.post(`/me/requests/${r.id}/accept`, { consentGeneral: consent }); reload(); }, 'وصلت موافقتك، رح نحجزلك موعد')}>موافق</button>
+              <button className="primary" disabled={busy} onClick={() => run(async () => { await api.post(`/me/requests/${r.id}/accept`, { consentGeneral: consent }); reload(); }, 'وصلت موافقتك، رح نحجزلك موعد')}><Icon name="check" />موافق على السعر</button>
               <button className="ghost" onClick={() => setDeclining(true)}>مش موافق</button>
             </div>
           )}
@@ -145,9 +155,9 @@ function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goP
       {r.visit && ['SCHEDULED', 'DISPATCHED', 'CHECKED_IN'].includes(r.visit.status) && (
         <div className="visit-box">
           <div>
-            <span className="small muted">الموعد</span>
+            <span className="small muted">موعد الزيارة</span>
             <strong>{fmtTime(r.visit.scheduled_at)}</strong>
-            <span className="small">{r.visit.staff_name}</span>
+            <span className="small">مع {staffName(r.visit.staff_name)}</span>
           </div>
           {r.visit.otp && (
             <div className="otp">
@@ -160,7 +170,7 @@ function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goP
       )}
 
       {['SUBMITTED', 'PENDING_INFO', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL', 'ACCEPTED', 'SCHEDULED'].includes(r.status) && !declining && (
-        <button className="ghost small" onClick={() => setDeclining(true)}>إلغاء الطلب</button>
+        <button className="ghost small" style={{ justifySelf: 'start' }} onClick={() => setDeclining(true)}>إلغاء الطلب</button>
       )}
     </li>
   );
@@ -185,7 +195,7 @@ function NewRequest({ onDone }: { onDone: () => void }) {
   const needsRx = chosen.some(([c]) => services.data?.find((s) => s.code === c)?.requires_prescription);
 
   return (
-    <form className="stack" onSubmit={(e) => {
+    <form className="card" onSubmit={(e) => {
       e.preventDefault();
       run(async () => {
         await api.post('/me/requests', {
@@ -195,6 +205,8 @@ function NewRequest({ onDone }: { onDone: () => void }) {
         onDone();
       }, 'وصل طلبك، رح يتواصل معك المنسق بالسعر');
     }}>
+      <div className="card-head"><div><h2>شو بتحتاج؟</h2><p>اختار خدمة أو أكثر. السعر النهائي بيوصلك قبل أي شي.</p></div></div>
+      {!services.data && <Loading />}
       {LINES.map(([line, title]) => byLine[line] && (
         <section key={line} className="svc-group">
           <span className="svc-line">{title}</span>
@@ -217,8 +229,8 @@ function NewRequest({ onDone }: { onDone: () => void }) {
       <label className="check"><input type="checkbox" checked={urgent} onChange={(e) => setUrgent(e.target.checked)} /> بدي ياها بنفس اليوم</label>
       {needsRx && <Field label="رقم الوصفة الطبية" hint="هاي الخدمة بدها وصفة طبيب"><input id="n-rx" value={rx} onChange={(e) => setRx(e.target.value)} /></Field>}
       <Field label="شو الحالة؟ (اختياري)"><textarea id="n-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-      <p className="small muted">السعر النهائي بيوصلك من المنسق قبل أي شي، وما في دفع قبل موافقتك.</p>
-      <button className="primary block" disabled={busy || chosen.length === 0}>أرسل الطلب</button>
+      <p className="trust"><Icon name="shield" size={16} />السعر النهائي بيوصلك من المنسق قبل أي شي، وما في دفع قبل موافقتك.</p>
+      <button className="primary block cta-sticky" disabled={busy || chosen.length === 0}>{chosen.length ? `أرسل الطلب (${chosen.length})` : 'اختار خدمة لتكمل'}</button>
     </form>
   );
 }
@@ -260,26 +272,26 @@ function MyFile({ me, reload }: { me: any; reload: () => void }) {
           </Field>
         </div>
         <Field label="العنوان بالتفصيل"><input id="m-addr" value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="المدينة، الحي، الشارع، العمارة، الطابق" /></Field>
-        <div className="row">
-          <button type="button" className="secondary" disabled={busy} onClick={locate}>استخدم موقعي الحالي</button>
+        <div className="row-tight">
+          <button type="button" className="secondary" disabled={busy} onClick={locate}><Icon name="pin" />استخدم موقعي الحالي</button>
           <span className="small muted">{f.lat != null ? `تم تحديد الموقع (${f.lat.toFixed(4)}, ${f.lng!.toFixed(4)})` : 'الموقع مش محدد'}</span>
         </div>
         <Field label="بتفضّل الممرض/الطبيب يكون" hint="بنحاول نلتزم فيه قدر الإمكان">
           <select id="m-pref" value={f.preferredStaffGender} onChange={(e) => setF({ ...f, preferredStaffGender: e.target.value })}><option value="">ما بتفرق</option><option value="F">أنثى</option><option value="M">ذكر</option></select>
         </Field>
         <Field label="رقم شخص للطوارئ"><input id="m-emg" value={f.emergencyContact} onChange={(e) => setF({ ...f, emergencyContact: e.target.value })} placeholder="الاسم والرقم" /></Field>
-        <button className="primary" disabled={busy}>حفظ</button>
+        <button className="primary" disabled={busy}>حفظ بياناتي</button>
       </form>
 
       <div className="card">
         <h2>نتائجي</h2>
-        {!me.results.length && <Empty>لما تجهز نتيجة بتلاقيها هون.</Empty>}
-        <ul className="list">{me.results.map((r: any) => <li key={r.id}><strong>{r.name_ar}</strong> <span className="small muted">{fmtTime(r.released_at)}</span><p className="small">{r.report}</p></li>)}</ul>
+        {!me.results.length && <Empty icon="lab" title="ما في نتائج لسا">لما تجهز نتيجة وبراجعها الطبيب بتلاقيها هون.</Empty>}
+        <ul className="list">{me.results.map((r: any) => <li key={r.id}><div className="list-row"><strong>{r.name_ar}</strong><span className="small muted">{fmtTime(r.released_at)}</span></div><p className="small" style={{ marginTop: 4 }}>{r.report}</p></li>)}</ul>
       </div>
 
       <div className="card">
         <h2>فواتيري</h2>
-        {!me.invoices.length && <Empty>ما في فواتير.</Empty>}
+        {!me.invoices.length && <Empty icon="receipt" title="ما في فواتير">فواتيرك الضريبية بتظهر هون بعد كل خدمة.</Empty>}
         <ul className="list">
           {me.invoices.map((i: any) => (
             <li key={i.id}>
@@ -287,7 +299,7 @@ function MyFile({ me, reload }: { me: any; reload: () => void }) {
                 <div><span className="mono">{i.invoice_no}</span><div className="small muted">{i.period_from ? `${i.period_from.slice(0, 10)} ← ${i.period_to.slice(0, 10)}` : fmtTime(i.created_at)}</div></div>
                 <div className="row-tight"><span className="mono">{jod(i.patient_total - i.paid)}</span><Pill status={i.status} /></div>
               </button>
-              {invOpen === i.id && invDoc.data && <InvoiceDoc doc={invDoc.data} />}
+              {invOpen === i.id && (invDoc.data ? <div className="stack" style={{ marginTop: 12 }}><InvoiceDoc doc={invDoc.data} /><button className="ghost no-print" style={{ justifySelf: 'start' }} onClick={() => window.print()}><Icon name="printer" />طباعة / حفظ PDF</button></div> : <Loading />)}
             </li>
           ))}
         </ul>
@@ -306,39 +318,43 @@ function Home({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     if (me.error) { saveToken(null); onLogout(); }
   }, [me.error, onLogout]);
-  if (!me.data) return <p className="muted" style={{ padding: 16 }}>تحميل…</p>;
+  if (!me.data) return <div className="content phone"><Loading card /></div>;
   const active = (reqs.data ?? []).filter((r) => !['COMPLETED', 'CANCELLED', 'CONVERTED_TO_EPISODE', 'REFERRED_OUT'].includes(r.status));
   const past = (reqs.data ?? []).filter((r) => !active.includes(r));
 
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand">رعاية</div>
+        <div className="brand"><Logo size={32} /><div className="brand-text"><span className="brand-name">رعاية</span><span className="brand-sub">رعاية طبية منزلية</span></div></div>
         <div className="me">
-          <span>أهلاً {me.data.fullName.split(' ')[0]}</span>
-          <button className="ghost" onClick={async () => { await api.post('/patient-auth/logout').catch(() => {}); saveToken(null); onLogout(); }}>خروج</button>
+          <span className="avatar" aria-hidden="true">{me.data.fullName.charAt(0)}</span>
+          <span className="me-id"><strong>{me.data.fullName.split(' ')[0]}</strong></span>
+          <button className="ghost icon-btn" aria-label="خروج" title="خروج" onClick={async () => { await api.post('/patient-auth/logout').catch(() => {}); saveToken(null); onLogout(); }}><Icon name="logout" /></button>
         </div>
       </header>
       <main className="content phone">
-        <div className="subtabs" role="tablist">
-          {([['requests', 'طلباتي'], ['new', 'طلب خدمة'], ['file', 'ملفي']] as const).map(([k, l]) => (
-            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
+        <div className="subtabs app-nav" role="tablist">
+          {([['requests', 'طلباتي', 'list'], ['new', 'طلب خدمة', 'plus'], ['file', 'ملفي', 'folder']] as const).map(([k, l, ic]) => (
+            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}><Icon name={ic} />{l}</button>
           ))}
         </div>
         {tab === 'requests' && (
           <div className="stack">
+            <section className="hello">
+              <h1>أهلاً {me.data.fullName.split(' ')[0]}</h1>
+              <p>{active.length ? `عندك ${active.length === 1 ? 'طلب واحد' : `${active.length} طلبات`} قيد المتابعة. منبلّغك بكل خطوة.` : 'كيف فينا نساعدك اليوم؟ فريقنا بيوصلك عالبيت.'}</p>
+              <button className="primary" onClick={() => setTab('new')}><Icon name="plus" />اطلب خدمة جديدة</button>
+            </section>
             <RatePrompts tick={reqs.data} />
-            {!active.length && (
-              <div className="empty">
-                <p>ما عندك طلبات حالية.</p>
-                <button className="primary" onClick={() => setTab('new')}>اطلب خدمة</button>
-              </div>
+            {!reqs.data && <Loading card />}
+            {reqs.data && !active.length && (
+              <Empty icon="calendar" title="ما عندك طلبات حالية">لما تطلب خدمة بتتابع هون السعر والموعد ورمز الزيارة.</Empty>
             )}
             <ul className="visits">{active.map((r) => <RequestCard key={r.id} r={r} reload={() => { reqs.reload(); me.reload(); }} goProfile={() => setTab('file')} />)}</ul>
             {past.length > 0 && (
               <details className="card">
                 <summary>طلبات سابقة ({past.length})</summary>
-                <ul className="list">{past.map((r) => <li key={r.id} className="list-row"><span>{r.items.map((i: any) => i.name_ar).join('، ')} · <span className="small muted">{fmtTime(r.createdAt)}</span></span><Pill status={r.status} /></li>)}</ul>
+                <ul className="list">{past.map((r) => <li key={r.id} className="list-row"><span><strong>{r.items.map((i: any) => i.name_ar).join('، ')}</strong><span className="cell-sub">{fmtTime(r.createdAt)}</span></span><Pill status={r.status} /></li>)}</ul>
               </details>
             )}
             <LiveStamp at={updatedAt} onRefresh={() => { reqs.reload(); me.reload(); }} />

@@ -1,6 +1,6 @@
 // Patient app: "How was your visit?" card after a finished visit. One rating per request.
 import { useState } from 'react';
-import { api } from '../api';
+import { api, staffName } from '../api';
 import { useAction, useLoad } from '../ui';
 
 interface Pending { requestId: number; requestNo: string; staffName: string; services: string[] }
@@ -21,7 +21,7 @@ function RateCard({ p, onDone }: { p: Pending; onDone: () => void }) {
     <li className="visit rate">
       <div>
         <strong>كيف كانت الزيارة؟</strong>
-        <div className="small muted">{p.services.join('، ')} · مع {p.staffName}</div>
+        <div className="small muted">{p.services.join('، ')} · مع {staffName(p.staffName)}</div>
       </div>
       <div className="stars-input" role="radiogroup" aria-label="التقييم من 5">
         {[1, 2, 3, 4, 5].map((n) => (

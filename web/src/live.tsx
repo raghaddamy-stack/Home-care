@@ -24,7 +24,7 @@ export function LiveStamp({ at, onRefresh }: { at: Date; onRefresh?: () => void 
   return (
     <span className="live small muted" aria-live="off">
       <span className="live-dot" aria-hidden="true" />
-      تحديث تلقائي · {at.toLocaleTimeString('ar-JO', { hour: '2-digit', minute: '2-digit' })}
+      تحديث تلقائي · {at.toLocaleTimeString('ar-JO-u-nu-latn', { hour: '2-digit', minute: '2-digit' })}
       {onRefresh && <button className="ghost live-btn" onClick={onRefresh}>حدّث الآن</button>}
     </span>
   );

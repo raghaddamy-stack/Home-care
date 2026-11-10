@@ -1,16 +1,23 @@
 // Coordinator console: request board (review → quote → schedule), home-care episodes (roster), and alerts.
 import { useMemo, useState } from 'react';
-import { api, escalationAr, fmtTime, isoToLocal, jod, localToIso, ROLE_AR, ROUTE_AR, type RequestRow, type Service, type Staff } from '../api';
-import { Drawer, Empty, Field, Pill, useAction, useLoad, useToast } from '../ui';
+import { api, escalationAr, fmtTime, isoToLocal, jod, localToIso, noteAr, ROLE_AR, ROUTE_AR, staffName, type RequestRow, type Service, type Staff } from '../api';
+import { Drawer, Empty, Field, Loading, Pill, useAction, useLoad, useToast } from '../ui';
+import { Icon } from '../icons';
 import { agoAr, LiveStamp, minutesSince, usePolling, useUpdatedAt } from '../live';
 import { KpiStrip, SlaBadge, type Dashboard } from './CoordinatorKpis';
 
-const COLUMNS: { key: string; title: string; statuses: string[]; hint: string }[] = [
-  { key: 'review', title: 'للمراجعة والتسعير', statuses: ['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL'], hint: 'سعّر ووجّه' },
-  { key: 'quoted', title: 'بانتظار موافقة المريض', statuses: ['QUOTED', 'EXPIRED'], hint: 'تابع مع المريض' },
-  { key: 'accepted', title: 'جاهز للجدولة', statuses: ['ACCEPTED', 'NO_SHOW'], hint: 'عيّن الكادر' },
-  { key: 'field', title: 'بالميدان', statuses: ['SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'], hint: 'متابعة' },
+const COLUMNS: { key: string; title: string; statuses: string[]; hint: string; empty: string }[] = [
+  { key: 'review', title: 'للمراجعة والتسعير', statuses: ['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL'], hint: 'سعّر ووجّه', empty: 'ما في طلبات جديدة' },
+  { key: 'quoted', title: 'بانتظار موافقة المريض', statuses: ['QUOTED', 'EXPIRED'], hint: 'تابع مع المريض', empty: 'ما في عروض معلّقة' },
+  { key: 'accepted', title: 'جاهز للجدولة', statuses: ['ACCEPTED', 'NO_SHOW'], hint: 'عيّن الكادر', empty: 'كل الموافقات انجدولت' },
+  { key: 'field', title: 'بالميدان', statuses: ['SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'], hint: 'متابعة الزيارات', empty: 'ما في زيارات جارية' },
 ];
+const LEVEL_AR: Record<string, string> = { LOW: 'منخفض', LOW_MEDIUM: 'مراجعة', MEDIUM: 'متوسط', HIGH: 'مرتفع', CRITICAL: 'حرج', OPS: 'تشغيلي', REVIEW: 'مراجعة' };
+/** "12h × 24h/day × 3d" → Arabic. */
+const planAr = (p: string) => {
+  const m = p.match(/(\d+)h\s*×\s*(\d+)h\/day\s*×\s*(\d+)d/);
+  return m ? `شفت ${m[1]} س · ${m[2]} س/يوم · ${m[3]} يوم` : p;
+};
 
 function RequestCard({ r, onOpen, services, late }: { r: RequestRow; onOpen: () => void; services: Service[]; late?: Dashboard['sla']['overdue'][number] }) {
   const names = r.services?.split(', ').map((c) => services.find((s) => s.code === c)?.name_ar ?? c).join('، ');
@@ -21,14 +28,14 @@ function RequestCard({ r, onOpen, services, late }: { r: RequestRow; onOpen: () 
         <Pill status={r.status} />
       </div>
       <strong>{r.full_name}</strong>
-      <span className="small">{names}</span>
+      <span className="svc-names">{names}</span>
       <div className="req-meta">
         <span title={fmtTime(r.created_at)}>{agoAr(minutesSince(r.created_at))}</span>
         {late && <SlaBadge waited={late.waitedMinutes} sla={late.slaMinutes} kind={late.kind} />}
         <span>{r.channel === 'APP' ? 'تطبيق' : 'كول سنتر'}</span>
         {r.urgency !== 'ROUTINE' && <span className="urgent">{r.urgency === 'URGENT' ? 'عاجل' : 'نفس اليوم'}</span>}
         {r.route && <span>{ROUTE_AR[r.route]}</span>}
-        {r.patient_total !== null && <span className="mono">{jod(r.patient_total)}</span>}
+        {r.patient_total !== null && <span className="mono amount">{jod(r.patient_total)}</span>}
       </div>
     </button>
   );
@@ -66,12 +73,13 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
   const at = when || (d?.preferred_at ? isoToLocal(new Date(d.preferred_at)) : isoToLocal(new Date(Date.now() + 3600_000)));
 
   return (
-    <Drawer open onClose={onClose} title={d ? `${d.request_no} · ${d.patient.full_name}` : 'تحميل…'}>
+    <Drawer open onClose={onClose} title={d ? `${d.request_no} · ${d.patient.full_name}` : 'جاري التحميل…'}>
+      {!d && <Loading card />}
       {d && (
         <div className="stack">
           <div className="facts">
             <div><span className="k">الحالة</span><Pill status={d.status} /></div>
-            <div><span className="k">الهاتف</span><span className="mono">{d.patient.phone ?? '—'}</span></div>
+            <div><span className="k">الهاتف</span>{d.patient.phone ? <a className="mono" href={`tel:${d.patient.phone}`}>{d.patient.phone}</a> : <span>—</span>}</div>
             <div><span className="k">العنوان</span><span>{d.patient.address ?? '—'}</span></div>
             <div><span className="k">الوقت المفضّل</span><span>{fmtTime(d.preferred_at)}</span></div>
             <div><span className="k">الخدمات</span><span>{d.items.map((i: any) => `${services.find((s) => s.code === i.service_code)?.name_ar ?? i.service_code} ×${i.qty}`).join('، ')}</span></div>
@@ -88,7 +96,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                   <Field label="موافقة">
                     <select id="appr" value={approver} onChange={(e) => setApprover(e.target.value)}>
                       <option value="">اختر مشرف</option>
-                      {supervisors.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      {supervisors.map((s) => <option key={s.id} value={s.id}>{staffName(s.name)}</option>)}
                     </select>
                   </Field>
                 )}
@@ -139,7 +147,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                   <select id="assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
                     <option value="">اختر</option>
                     {candidates.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name} · {ROLE_AR[s.role]}{s.zone_id === d.patient.zone_id ? ' · نفس المنطقة' : ''}</option>
+                      <option key={s.id} value={s.id}>{staffName(s.name)} · {ROLE_AR[s.role]}{s.zone_id === d.patient.zone_id ? ' · نفس المنطقة' : ''}</option>
                     ))}
                   </select>
                 </Field>
@@ -171,7 +179,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
               <h3>الزيارات</h3>
               <ul className="list">
                 {d.visits.map((v: any) => (
-                  <li key={v.id} className="list-row"><span>{staff.find((s) => s.id === v.staff_id)?.name} · {fmtTime(v.scheduled_at)}</span><Pill status={v.status} /></li>
+                  <li key={v.id} className="list-row"><span>{staffName(staff.find((s) => s.id === v.staff_id)?.name)} · {fmtTime(v.scheduled_at)}</span><Pill status={v.status} /></li>
                 ))}
               </ul>
             </section>
@@ -193,7 +201,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
             <h3>السجل</h3>
             <ol className="timeline">
               {d.history.map((h: any) => (
-                <li key={h.id}><Pill status={h.to_status} /> <span className="muted small">{fmtTime(h.at)}</span> {h.note && <span className="small">· {h.note}</span>}</li>
+                <li key={h.id} className="row-tight"><Pill status={h.to_status} /> <span className="muted small">{fmtTime(h.at)}</span> {h.note && <span className="small">· {noteAr(h.note)}</span>}</li>
               ))}
             </ol>
           </section>
@@ -220,21 +228,25 @@ function Board({ staff, services, onAlerts }: { staff: Staff[]; services: Servic
     <>
       <KpiStrip d={dash.data} lateOnly={lateOnly} onLateOnly={() => setLateOnly(!lateOnly)} onAlerts={onAlerts} onChanged={dash.reload} />
       <div className="toolbar">
-        <input className="search" placeholder="بحث بالاسم أو رقم الطلب أو الرقم الوطني" value={q} onChange={(e) => setQ(e.target.value)} aria-label="بحث" />
-        {lateOnly && <button className="chip on" onClick={() => setLateOnly(false)}>المتأخر عن SLA بس ✕</button>}
+        <label className="search-box">
+          <Icon name="search" />
+          <input type="search" placeholder="بحث بالاسم أو رقم الطلب أو الرقم الوطني" value={q} onChange={(e) => setQ(e.target.value)} aria-label="بحث" />
+        </label>
+        {lateOnly && <button className="chip on" onClick={() => setLateOnly(false)}>المتأخر عن SLA بس <Icon name="x" size={14} /></button>}
         <LiveStamp at={updatedAt} onRefresh={refresh} />
       </div>
-      {list.error && <p className="error">{list.error}</p>}
+      {list.error && <div className="notice bad">تعذّر تحميل الطلبات: {list.error}</div>}
       <div className="board">
         {COLUMNS.map((c) => {
           const items = rows.filter((r) => c.statuses.includes(r.status));
           return (
-            <section key={c.key} className="col">
+            <section key={c.key} className="col" data-col={c.key}>
               <header><h3>{c.title}</h3><span className="count">{items.length}</span></header>
               <p className="muted small">{c.hint}</p>
               <div className="col-body">
                 {items.map((r) => <RequestCard key={r.id} r={r} services={services} late={late.get(r.id)} onOpen={() => setOpen(r.id)} />)}
-                {items.length === 0 && <Empty>فاضي</Empty>}
+                {!list.data && !list.error && <Loading />}
+                {list.data && items.length === 0 && <Empty compact>{q || lateOnly ? 'ما في نتائج للبحث' : c.empty}</Empty>}
               </div>
             </section>
           );
@@ -259,24 +271,33 @@ function Episodes({ staff }: { staff: Staff[] }) {
   return (
     <>
       <div className="card">
-        <h2>حالات الرعاية المنزلية النشطة</h2>
-        {!list.data?.length && <Empty>ما في حالات نشطة. بتنفتح الحالة لما الطبيب يكمّل زيارة التقييم.</Empty>}
-        <table className="table">
-          <thead><tr><th>الحالة</th><th>المريض</th><th>التشخيص</th><th>خطة الرعاية</th><th>شفتات مفتوحة</th><th>الفوترة</th><th></th></tr></thead>
+        <div className="card-head">
+          <div>
+            <h2>حالات الرعاية المنزلية النشطة</h2>
+            <p>من هون بتبني جدول الشفتات بعد ما الطبيب يعتمد خطة الرعاية.</p>
+          </div>
+          {!!list.data?.length && <span className="count">{list.data.length}</span>}
+        </div>
+        {!list.data && !list.error && <Loading />}
+        {list.data && !list.data.length && <Empty icon="heart" title="ما في حالات نشطة">بتنفتح الحالة لما الطبيب يكمّل زيارة التقييم.</Empty>}
+        {!!list.data?.length && <div className="table-wrap"><table className="table stack-sm">
+          <thead><tr><th>المريض</th><th>التشخيص</th><th>خطة الرعاية</th><th>شفتات مفتوحة</th><th>الفوترة</th><th><span className="sr-only">إجراء</span></th></tr></thead>
           <tbody>
             {list.data?.map((e) => (
               <tr key={e.id}>
-                <td className="mono">{e.episode_no}</td><td>{e.full_name}</td><td>{e.diagnosis}</td>
-                <td>{e.plan ? <span className="mono">{e.plan}</span> : <Pill status="PENDING_INFO" label="بانتظار الطبيب" />}</td>
-                <td className="mono">{e.open_shifts}</td>
-                <td>{e.billing_cycle === 'WEEKLY' ? 'أسبوعي' : 'شهري'}</td>
-                <td><button className="secondary" onClick={() => { setOpen(e.id); setNurses([]); }}>الشفتات</button></td>
+                <td data-label="المريض" className="lead">{e.full_name}<span className="cell-sub mono">{e.episode_no}</span></td>
+                <td data-label="التشخيص">{e.diagnosis}</td>
+                <td data-label="خطة الرعاية">{e.plan ? <span>{planAr(e.plan)}</span> : <Pill status="PENDING_INFO" label="بانتظار الطبيب" />}</td>
+                <td data-label="شفتات مفتوحة" className="mono">{e.open_shifts}</td>
+                <td data-label="الفوترة">{e.billing_cycle === 'WEEKLY' ? 'أسبوعي' : 'شهري'}</td>
+                <td data-label="" className="act"><button className="secondary" onClick={() => { setOpen(e.id); setNurses([]); }}><Icon name="calendar" />الشفتات</button></td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>}
       </div>
-      <Drawer open={open !== null} onClose={() => setOpen(null)} title={ep ? `${ep.episode_no} · ${ep.patient.full_name}` : 'تحميل…'}>
+      <Drawer open={open !== null} onClose={() => setOpen(null)} title={ep ? `${ep.episode_no} · ${ep.patient.full_name}` : 'جاري التحميل…'}>
+        {!ep && <Loading card />}
         {ep && (
           <div className="stack">
             {ep.carePlan ? (
@@ -289,7 +310,7 @@ function Episodes({ staff }: { staff: Staff[] }) {
                     const i = nurses.indexOf(n.id);
                     return (
                       <button key={n.id} className={i >= 0 ? 'chip on' : 'chip'} onClick={() => setNurses(i >= 0 ? nurses.filter((x) => x !== n.id) : [...nurses, n.id])}>
-                        {i >= 0 && <span className="mono">{i + 1}</span>} {n.name}{n.gender === ep.patient.gender ? ' · نفس الجنس' : ''}
+                        {i >= 0 && <span className="mono">{i + 1}</span>} {staffName(n.name)}{n.gender === ep.patient.gender ? ' · نفس الجنس' : ''}
                       </button>
                     );
                   })}
@@ -301,14 +322,14 @@ function Episodes({ staff }: { staff: Staff[] }) {
                   return r;
                 }, 'تم نشر الجدول على تطبيق الممرضين')}>نشر الجدول</button>
               </section>
-            ) : <div className="notice warn">الطبيب لسا ما اعتمد خطة الرعاية.</div>}
+            ) : <div className="notice warn"><div className="notice-head"><Icon name="clock" /><span>الطبيب لسا ما اعتمد خطة الرعاية. أول ما يعتمدها بتقدر تبني الجدول من هون.</span></div></div>}
             <section className="action">
               <h3>الشفتات</h3>
-              {!ep.shifts.length && <Empty>ما في شفتات بعد.</Empty>}
+              {!ep.shifts.length && <Empty compact>ما في شفتات بعد. اختار الممرضين وانشر الجدول.</Empty>}
               <ul className="list">
                 {ep.shifts.map((s: any) => (
                   <li key={s.id} className="list-row">
-                    <span>{fmtTime(s.planned_start)} ← {fmtTime(s.planned_end)} · {staff.find((x) => x.id === s.nurse_id)?.name}</span>
+                    <span><strong>{staffName(staff.find((x) => x.id === s.nurse_id)?.name)}</strong><span className="cell-sub">{fmtTime(s.planned_start)} ← {fmtTime(s.planned_end)}</span></span>
                     <span className="row-tight">{s.billable_minutes != null && <span className="mono small">{(s.billable_minutes / 60).toFixed(2)} س</span>}<Pill status={s.status} /></span>
                   </li>
                 ))}
@@ -335,49 +356,50 @@ function Alerts({ staff }: { staff: Staff[] }) {
     <div className="split">
       <div className="card">
         <div className="card-head">
-          <h2>شفتات بدون حضور</h2>
+          <div><h2>شفتات بدون حضور</h2><p>أي شفت ما سجّل فيه الممرض حضور بعد مهلة السماح (حسب إعدادات المالك).</p></div>
           <button className="secondary" disabled={busy} onClick={() => run(async () => {
             const r = await api.post<{ late: number[] }>('/shifts/check-late');
             reload();
             if (!r.late.length) throw new Error('ما في تأخير جديد');
-          }, 'تم رصد شفتات متأخرة')}>افحص الآن</button>
+          }, 'تم رصد شفتات متأخرة')}><Icon name="refresh" />افحص الآن</button>
         </div>
-        <p className="muted small">أي شفت ما سجّل فيه الممرض حضور بعد مهلة السماح (حسب إعدادات المالك) بيظهر هون.</p>
-        {!late.length && <Empty>كل الشفتات الحالية مغطاة.</Empty>}
+        {!shifts.data && <Loading />}
+        {shifts.data && !late.length && <Empty icon="check" title="كل الشفتات مغطاة">ما في ممرض متأخر عن شفته هلّق.</Empty>}
         <ul className="list">
           {late.map((s) => (
             <li key={s.id} className="list-row">
               <div>
-                <strong>{s.full_name}</strong> <span className="mono muted">{s.episode_no}</span>
-                <div className="small muted">{fmtTime(s.planned_start)} · {staff.find((x) => x.id === s.nurse_id)?.name}</div>
+                <div className="li-title"><strong>{s.full_name}</strong> <span className="mono muted small">{s.episode_no}</span></div>
+                <div className="small muted">{fmtTime(s.planned_start)} · {staffName(staff.find((x) => x.id === s.nurse_id)?.name)} ما سجّل حضور</div>
               </div>
               <div className="row-tight">
                 <select aria-label="ممرض بديل" value={pick[s.id] ?? ''} onChange={(e) => setPick({ ...pick, [s.id]: e.target.value })}>
                   <option value="">ممرض بديل</option>
-                  {nurses.filter((n) => n.id !== s.nurse_id).map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+                  {nurses.filter((n) => n.id !== s.nurse_id).map((n) => <option key={n.id} value={n.id}>{staffName(n.name)}</option>)}
                 </select>
                 <button className="primary" disabled={busy || !pick[s.id]} onClick={() => run(async () => {
                   const r = await api.post<{ warnings?: string[] }>(`/shifts/${s.id}/reassign`, { nurseId: Number(pick[s.id]) });
                   if (r.warnings?.length) toast('تنبيه: جنس البديل مش متل ما بيفضّل المريض.', 'err');
                   reload();
-                }, 'انبعت الممرض البديل')}>أرسل</button>
+                }, 'انبعت الممرض البديل')}><Icon name="send" />أرسل البديل</button>
               </div>
             </li>
           ))}
         </ul>
       </div>
       <div className="card">
-        <div className="card-head"><h2>تصعيدات مفتوحة</h2><button className="ghost" onClick={reload}>تحديث</button></div>
-        {!esc.data?.length && <Empty>ما في تصعيدات مفتوحة.</Empty>}
+        <div className="card-head"><div><h2>تصعيدات مفتوحة</h2><p>حالات سريرية أو تشغيلية بدها قرار.</p></div><button className="ghost" onClick={reload}><Icon name="refresh" />تحديث</button></div>
+        {!esc.data && <Loading />}
+        {esc.data && !esc.data.length && <Empty icon="check" title="ما في تصعيدات مفتوحة">كل الحالات مستقرة.</Empty>}
         <ul className="list">
           {esc.data?.map((e) => (
             <li key={e.id} className="list-row">
               <div>
-                <strong>{e.full_name}</strong> <span className="mono muted">{e.episode_no}</span>
+                <div className="li-title"><strong>{e.full_name}</strong> <span className="mono muted small">{e.episode_no}</span></div>
                 <div className="small">{escalationAr(e.trigger, e.level)}</div>
                 <div className="small muted">{fmtTime(e.opened_at)}</div>
               </div>
-              <Pill status={e.level} label={{ NEWS2: 'NEWS2', CRITICAL_RESULT: 'نتيجة حرجة', LATE_SHIFT: 'تأخر ممرض', INCIDENT: 'حادثة' }[e.trigger as string] + ` · ${e.level}`} />
+              <Pill status={e.level} label={{ NEWS2: 'NEWS2', CRITICAL_RESULT: 'نتيجة حرجة', LATE_SHIFT: 'تأخر ممرض', INCIDENT: 'حادثة' }[e.trigger as string] + ` · ${LEVEL_AR[e.level] ?? e.level}`} />
             </li>
           ))}
         </ul>
@@ -390,7 +412,7 @@ export function Coordinator(_: { me: Staff }) {
   const staff = useLoad(() => api.get<Staff[]>('/staff'));
   const services = useLoad(() => api.get<Service[]>('/services'));
   const [tab, setTab] = useState<'board' | 'episodes' | 'alerts'>('board');
-  if (!staff.data || !services.data) return <p className="muted">تحميل…</p>;
+  if (!staff.data || !services.data) return <Loading card />;
   return (
     <>
       <div className="subtabs" role="tablist">
