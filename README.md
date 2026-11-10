@@ -7,6 +7,9 @@ An integrated home-care system covering intake (app and call center), coordinato
 | File | What it is |
 |---|---|
 | [`docs/workflow-bpmn.html`](docs/workflow-bpmn.html) | BPMN 2.0 swimlane diagram of the full process. Click a step to see who does it and which system module covers it. |
+| [`docs/user-manual.md`](docs/user-manual.md) | User manual in Arabic for every role, with screenshots (`docs/manual/img/`). |
+| [`docs/qa-report.md`](docs/qa-report.md) | Test results, defects fixed, known limitations. Re-run with `cd backend && npm test` and `./e2e/run.sh`. |
+| [`docs/ui-ux-review.md`](docs/ui-ux-review.md) | UI/UX audit and the before/after screenshots in `docs/ui-ux/`. |
 | [`docs/erp-and-tax-integration.md`](docs/erp-and-tax-integration.md) | Tax on invoices, Jordan e-invoicing (JoFotara) with QR, and the ERP API (SAP mapping, webhooks, API keys). |
 | [`docs/business-requirements.md`](docs/business-requirements.md) | Business requirements: roles and permissions, data model, state machines, business rules, gaps in the original workflow, KPIs, and a phased roadmap. |
 
