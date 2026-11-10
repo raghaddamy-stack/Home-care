@@ -212,3 +212,43 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .otp { text-align: center; }
 .otp strong { font-size: 28px; letter-spacing: .2em; color: var(--accent); }
 .empty p { margin: 0 0 10px; }
+
+/* Grid items default to min-width: auto, so the wide board pushed the whole page sideways on phones. */
+.content { min-width: 0; }
+
+/* Coordinator KPI strip + SLA */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; min-height: 84px; }
+.kpi { display: grid; gap: 2px; align-content: start; text-align: start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; color: var(--fg); white-space: normal; font-weight: 400; min-width: 0; }
+button.kpi:hover { border-color: var(--accent); }
+.kpi.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.kpi-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.kpi-value { font-size: 26px; font-weight: 600; line-height: 1.2; }
+.kpi-sub { font-size: 12px; color: var(--muted); }
+.kpi-bad { border-inline-start: 3px solid var(--bad); }
+.kpi-bad .kpi-value, .kpi-bad .kpi-sub { color: var(--bad); }
+.kpi-warn { border-inline-start: 3px solid var(--warn); }
+.kpi-warn .kpi-sub { color: var(--warn); }
+.kpi-ok .kpi-value { color: var(--ok); }
+@media (max-width: 460px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi-value { font-size: 22px; } }
+.toolbar { align-items: center; flex-wrap: wrap; }
+.req-card.is-late { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.sla-late { color: var(--bad); background: var(--bad-soft); border-radius: 999px; padding: 0 8px; font-weight: 600; }
+
+/* Live refresh stamp */
+.live { display: inline-flex; align-items: center; gap: 8px; margin-inline-start: auto; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.live-btn { padding: 4px 10px; font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) {
+  .live-dot { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+}
+
+/* Ratings */
+.rate { border-color: var(--accent); background: var(--accent-soft); }
+.rate textarea { background: var(--surface); }
+.stars-input { display: flex; align-items: center; gap: 4px; }
+.star { font-size: 30px; line-height: 1; padding: 4px 6px; background: transparent; color: var(--line-strong); }
+.star.on { color: var(--warn); }
+.stars { color: var(--warn); letter-spacing: 2px; white-space: nowrap; }
+.stars .muted { color: var(--line-strong); }
+.fb-item { gap: 6px; }

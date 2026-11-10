@@ -344,3 +344,19 @@ CREATE TABLE IF NOT EXISTS patient_sessions (
   patient_id INTEGER NOT NULL REFERENCES patients(id),
   expires_at TEXT NOT NULL
 );
+
+-- Patient satisfaction after a finished visit (one rating per request). Low scores open a supervisor follow-up.
+CREATE TABLE IF NOT EXISTS visit_feedback (
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL UNIQUE REFERENCES service_requests(id),
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  staff_id INTEGER REFERENCES staff(id),
+  score INTEGER NOT NULL CHECK (score BETWEEN 1 AND 5),
+  tags TEXT NOT NULL DEFAULT '[]',            -- JSON array of FEEDBACK_TAGS
+  comment TEXT,
+  follow_up TEXT NOT NULL DEFAULT 'NONE' CHECK (follow_up IN ('NONE','OPEN','CLOSED')),
+  follow_up_note TEXT,
+  closed_by INTEGER REFERENCES staff(id),
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

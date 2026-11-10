@@ -7,6 +7,8 @@ import { clinicalRoutes } from './routes/clinical.js';
 import { billingRoutes } from './routes/billing.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { patientAppRoutes } from './routes/patientApp.js';
+import { dashboardRoutes } from './routes/dashboard.js';
+import { feedbackRoutes } from './routes/feedback.js';
 
 export function createApp(db: Db) {
   const app = express();
@@ -18,6 +20,7 @@ export function createApp(db: Db) {
   app.use('/api', billingRoutes(db));
   app.use('/api', catalogRoutes(db));
   app.use('/api', patientAppRoutes(db));
+  app.use('/api', dashboardRoutes(db), feedbackRoutes(db));
   app.use(errorHandler);
   return app;
 }

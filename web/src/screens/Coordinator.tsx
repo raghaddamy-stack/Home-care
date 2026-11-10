@@ -2,6 +2,8 @@
 import { useMemo, useState } from 'react';
 import { api, escalationAr, fmtTime, isoToLocal, jod, localToIso, ROLE_AR, ROUTE_AR, type RequestRow, type Service, type Staff } from '../api';
 import { Drawer, Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { agoAr, LiveStamp, minutesSince, usePolling, useUpdatedAt } from '../live';
+import { KpiStrip, SlaBadge, type Dashboard } from './CoordinatorKpis';
 
 const COLUMNS: { key: string; title: string; statuses: string[]; hint: string }[] = [
   { key: 'review', title: 'للمراجعة والتسعير', statuses: ['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL'], hint: 'سعّر ووجّه' },
@@ -10,16 +12,19 @@ const COLUMNS: { key: string; title: string; statuses: string[]; hint: string }[
   { key: 'field', title: 'بالميدان', statuses: ['SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'], hint: 'متابعة' },
 ];
 
-function RequestCard({ r, onOpen }: { r: RequestRow; onOpen: () => void }) {
+function RequestCard({ r, onOpen, services, late }: { r: RequestRow; onOpen: () => void; services: Service[]; late?: Dashboard['sla']['overdue'][number] }) {
+  const names = r.services?.split(', ').map((c) => services.find((s) => s.code === c)?.name_ar ?? c).join('، ');
   return (
-    <button className={`req-card u-${r.urgency}`} onClick={onOpen}>
+    <button className={`req-card u-${r.urgency}${late ? ' is-late' : ''}`} onClick={onOpen}>
       <div className="req-top">
         <span className="mono muted">{r.request_no}</span>
         <Pill status={r.status} />
       </div>
       <strong>{r.full_name}</strong>
-      <span className="small">{r.services}</span>
+      <span className="small">{names}</span>
       <div className="req-meta">
+        <span title={fmtTime(r.created_at)}>{agoAr(minutesSince(r.created_at))}</span>
+        {late && <SlaBadge waited={late.waitedMinutes} sla={late.slaMinutes} kind={late.kind} />}
         <span>{r.channel === 'APP' ? 'تطبيق' : 'كول سنتر'}</span>
         {r.urgency !== 'ROUTINE' && <span className="urgent">{r.urgency === 'URGENT' ? 'عاجل' : 'نفس اليوم'}</span>}
         {r.route && <span>{ROUTE_AR[r.route]}</span>}
@@ -176,16 +181,26 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
   );
 }
 
-function Board({ staff, services }: { staff: Staff[]; services: Service[] }) {
+function Board({ staff, services, onAlerts }: { staff: Staff[]; services: Service[]; onAlerts: () => void }) {
   const list = useLoad(() => api.get<RequestRow[]>('/requests?status=' + COLUMNS.flatMap((c) => c.statuses).join(',')));
+  const dash = useLoad(() => api.get<Dashboard>('/dashboard/coordinator'));
   const [open, setOpen] = useState<number | null>(null);
   const [q, setQ] = useState('');
-  const rows = (list.data ?? []).filter((r) => !q || r.full_name.includes(q) || r.request_no.includes(q) || r.national_id.includes(q));
+  const [lateOnly, setLateOnly] = useState(false);
+  const refresh = () => { list.reload(); dash.reload(); };
+  usePolling(refresh, 30_000);
+  const updatedAt = useUpdatedAt(list.data);
+  const late = new Map((dash.data?.sla.overdue ?? []).map((x) => [x.id, x]));
+  const rows = (list.data ?? [])
+    .filter((r) => !q || r.full_name.includes(q) || r.request_no.includes(q) || r.national_id.includes(q))
+    .filter((r) => !lateOnly || late.has(r.id));
   return (
     <>
+      <KpiStrip d={dash.data} lateOnly={lateOnly} onLateOnly={() => setLateOnly(!lateOnly)} onAlerts={onAlerts} onChanged={dash.reload} />
       <div className="toolbar">
         <input className="search" placeholder="بحث بالاسم أو رقم الطلب أو الرقم الوطني" value={q} onChange={(e) => setQ(e.target.value)} aria-label="بحث" />
-        <button className="ghost" onClick={list.reload}>تحديث</button>
+        {lateOnly && <button className="chip on" onClick={() => setLateOnly(false)}>المتأخر عن SLA بس ✕</button>}
+        <LiveStamp at={updatedAt} onRefresh={refresh} />
       </div>
       {list.error && <p className="error">{list.error}</p>}
       <div className="board">
@@ -196,14 +211,14 @@ function Board({ staff, services }: { staff: Staff[]; services: Service[] }) {
               <header><h3>{c.title}</h3><span className="count">{items.length}</span></header>
               <p className="muted small">{c.hint}</p>
               <div className="col-body">
-                {items.map((r) => <RequestCard key={r.id} r={r} onOpen={() => setOpen(r.id)} />)}
+                {items.map((r) => <RequestCard key={r.id} r={r} services={services} late={late.get(r.id)} onOpen={() => setOpen(r.id)} />)}
                 {items.length === 0 && <Empty>فاضي</Empty>}
               </div>
             </section>
           );
         })}
       </div>
-      {open !== null && <RequestDrawer id={open} onClose={() => setOpen(null)} onChanged={list.reload} staff={staff} services={services} />}
+      {open !== null && <RequestDrawer id={open} onClose={() => setOpen(null)} onChanged={refresh} staff={staff} services={services} />}
     </>
   );
 }
@@ -357,7 +372,7 @@ export function Coordinator(_: { me: Staff }) {
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
-      {tab === 'board' && <Board staff={staff.data} services={services.data} />}
+      {tab === 'board' && <Board staff={staff.data} services={services.data} onAlerts={() => setTab('alerts')} />}
       {tab === 'episodes' && <Episodes staff={staff.data} />}
       {tab === 'alerts' && <Alerts staff={staff.data} />}
     </>

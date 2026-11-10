@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, fmtTime, isoToLocal, jod, localToIso, setPatientToken, type Service } from '../api';
 import { Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { LiveStamp, usePolling, useUpdatedAt } from '../live';
+import { RatePrompts } from './PatientFeedback';
 
 const TOKEN_KEY = 'hc.patientToken';
 export const loadPatientToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
@@ -285,6 +287,8 @@ function Home({ onLogout }: { onLogout: () => void }) {
   const me = useLoad(() => api.get<any>('/me'));
   const reqs = useLoad(() => api.get<any[]>('/me/requests'));
   const [tab, setTab] = useState<'requests' | 'new' | 'file'>('requests');
+  usePolling(reqs.reload, 20_000, tab === 'requests');
+  const updatedAt = useUpdatedAt(reqs.data);
   useEffect(() => {
     if (me.error) { saveToken(null); onLogout(); }
   }, [me.error, onLogout]);
@@ -309,6 +313,7 @@ function Home({ onLogout }: { onLogout: () => void }) {
         </div>
         {tab === 'requests' && (
           <div className="stack">
+            <RatePrompts tick={reqs.data} />
             {!active.length && (
               <div className="empty">
                 <p>ما عندك طلبات حالية.</p>
@@ -322,7 +327,7 @@ function Home({ onLogout }: { onLogout: () => void }) {
                 <ul className="list">{past.map((r) => <li key={r.id} className="list-row"><span>{r.items.map((i: any) => i.name_ar).join('، ')} · <span className="small muted">{fmtTime(r.createdAt)}</span></span><Pill status={r.status} /></li>)}</ul>
               </details>
             )}
-            <button className="ghost" onClick={() => { reqs.reload(); me.reload(); }}>تحديث</button>
+            <LiveStamp at={updatedAt} onRefresh={() => { reqs.reload(); me.reload(); }} />
           </div>
         )}
         {tab === 'new' && <NewRequest onDone={() => { reqs.reload(); setTab('requests'); }} />}
