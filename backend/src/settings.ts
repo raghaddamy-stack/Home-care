@@ -2,6 +2,7 @@
 // lives here with a default; the owner edits them from the settings screen (ADMIN role).
 // Domain code reads `cfg()` at call time, so a change applies to the next action without a restart.
 import type { Db } from './db.js';
+import { decrypt, encrypt, maskSecret } from './secrets.js';
 
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6; // Sun..Sat
 
@@ -61,7 +62,33 @@ export interface Settings {
   // Feedback
   feedbackLowScore: number;
   feedbackWindowDays: number;
+  // Tax
+  pricesIncludeTax: boolean;
+  taxRules: Record<TaxLine, { category: TaxCategory; rate: number }>;
+  // E-invoicing (Jordan national e-invoicing system, JoFotara)
+  einvoiceProvider: 'NONE' | 'MOCK' | 'JOFOTARA';
+  einvoiceEndpoint: string;
+  einvoiceClientId: string;
+  einvoiceSecretKey: string;
+  sellerTin: string;
+  sellerName: string;
+  incomeSourceSequence: string;
+  einvoiceAutoSubmit: boolean;
+  einvoicePaymentType: 'AUTO' | 'CASH' | 'RECEIVABLE';
+  // ERP integration
+  erpWebhookUrl: string;
+  erpWebhookSecret: string;
+  erpGlAccounts: Record<TaxLine, string>;
+  erpTaxCodes: Record<TaxCategory, string>;
+  erpCostCenter: string;
 }
+
+/** Revenue lines used for tax and accounting: the service lines, plus fees (cancellation / no-show). */
+export const TAX_LINES = ['LAB', 'IMG', 'DEV', 'DOC', 'NRS', 'FEE'] as const;
+export type TaxLine = (typeof TAX_LINES)[number];
+/** UN/ECE 5305 categories used by JoFotara: S standard, Z zero-rated, O exempt / out of scope. */
+export const TAX_CATEGORIES = ['S', 'Z', 'O'] as const;
+export type TaxCategory = (typeof TAX_CATEGORIES)[number];
 
 export const DEFAULTS: Settings = {
   timezone: 'Asia/Amman',
@@ -111,9 +138,31 @@ export const DEFAULTS: Settings = {
   slaScheduleRoutineMin: 1440,
   feedbackLowScore: 2,
   feedbackWindowDays: 14,
+  pricesIncludeTax: true,
+  taxRules: {
+    LAB: { category: 'O', rate: 0 }, IMG: { category: 'O', rate: 0 }, DOC: { category: 'O', rate: 0 },
+    NRS: { category: 'O', rate: 0 }, DEV: { category: 'S', rate: 16 }, FEE: { category: 'S', rate: 16 },
+  },
+  einvoiceProvider: 'NONE',
+  einvoiceEndpoint: 'https://backend.jofotara.gov.jo/core/invoices/',
+  einvoiceClientId: '',
+  einvoiceSecretKey: '',
+  sellerTin: '',
+  sellerName: '',
+  incomeSourceSequence: '',
+  einvoiceAutoSubmit: true,
+  einvoicePaymentType: 'AUTO',
+  erpWebhookUrl: '',
+  erpWebhookSecret: '',
+  erpGlAccounts: { LAB: '', IMG: '', DEV: '', DOC: '', NRS: '', FEE: '' },
+  erpTaxCodes: { S: '', Z: '', O: '' },
+  erpCostCenter: '',
 };
 
-type Kind = 'number' | 'money' | 'boolean' | 'select' | 'weekdays' | 'dates' | 'staff' | 'staffList' | 'text';
+type Kind = 'number' | 'money' | 'boolean' | 'select' | 'weekdays' | 'dates' | 'staff' | 'staffList' | 'text' | 'url' | 'secret' | 'taxMap' | 'lineMap' | 'categoryMap';
+
+/** Settings stored encrypted and never sent back to the browser. */
+export const SECRET_KEYS: (keyof Settings)[] = ['einvoiceClientId', 'einvoiceSecretKey', 'erpWebhookSecret'];
 
 export interface SettingMeta {
   key: keyof Settings;
@@ -191,6 +240,29 @@ export const META: SettingMeta[] = [
   { key: 'sessionDays', group: 'تطبيق المريض', label: 'مدة بقاء المريض مسجّل دخول', kind: 'number', min: 1, max: 365, unit: 'يوم' },
   { key: 'feedbackLowScore', group: 'تطبيق المريض', label: 'تقييم بيفتح متابعة إذا كان أقل من أو يساوي', kind: 'number', min: 1, max: 4, unit: 'نجوم' },
   { key: 'feedbackWindowDays', group: 'تطبيق المريض', label: 'نطلب التقييم خلال', kind: 'number', min: 1, max: 90, unit: 'يوم' },
+
+  { key: 'pricesIncludeTax', group: 'الضريبة', label: 'الأسعار المعروضة شاملة الضريبة', kind: 'boolean',
+    help: 'نعم: السعر اللي بيشوفه المريض هو النهائي والضريبة بتنفصل منه. لا: الضريبة بتنضاف فوق السعر.' },
+  { key: 'taxRules', group: 'الضريبة', label: 'فئة ونسبة الضريبة لكل نوع خدمة', kind: 'taxMap',
+    help: 'S خاضع بنسبة، Z نسبة صفر، O معفى. راجع المحاسب الضريبي لتحديد فئة كل خدمة.' },
+
+  { key: 'einvoiceProvider', group: 'الفوترة الإلكترونية', label: 'ربط الفواتير مع دائرة الضريبة', kind: 'select', options: [
+    { value: 'NONE', label: 'متوقف' }, { value: 'MOCK', label: 'تجريبي (بدون إرسال حقيقي)' }, { value: 'JOFOTARA', label: 'نظام الفوترة الوطني JoFotara' }] },
+  { key: 'einvoiceEndpoint', group: 'الفوترة الإلكترونية', label: 'رابط الإرسال', kind: 'url', help: 'من الدليل الفني لنظام الفوترة الوطني.' },
+  { key: 'einvoiceClientId', group: 'الفوترة الإلكترونية', label: 'Client ID', kind: 'secret', help: 'من نظام الفوترة: ربط الأجهزة. كل تسلسل إله Client ID و Secret Key.' },
+  { key: 'einvoiceSecretKey', group: 'الفوترة الإلكترونية', label: 'Secret Key', kind: 'secret' },
+  { key: 'sellerTin', group: 'الفوترة الإلكترونية', label: 'الرقم الضريبي للشركة', kind: 'text' },
+  { key: 'sellerName', group: 'الفوترة الإلكترونية', label: 'اسم الشركة المسجّل', kind: 'text' },
+  { key: 'incomeSourceSequence', group: 'الفوترة الإلكترونية', label: 'رقم تسلسل مصدر الدخل', kind: 'text' },
+  { key: 'einvoiceAutoSubmit', group: 'الفوترة الإلكترونية', label: 'إرسال الفاتورة تلقائياً عند إصدارها', kind: 'boolean' },
+  { key: 'einvoicePaymentType', group: 'الفوترة الإلكترونية', label: 'نوع الفاتورة', kind: 'select', options: [
+    { value: 'AUTO', label: 'تلقائي: نقدية إذا انْدفعت عند الإصدار، وإلا ذمم' }, { value: 'CASH', label: 'نقدية دائماً' }, { value: 'RECEIVABLE', label: 'ذمم دائماً' }] },
+
+  { key: 'erpWebhookUrl', group: 'ربط ERP', label: 'رابط استقبال الأحداث (Webhook)', kind: 'url', help: 'نظام الـ ERP بيستقبل عليه: فاتورة صدرت، دفعة، فاتورة إلكترونية انقبلت. فاضي = متوقف.' },
+  { key: 'erpWebhookSecret', group: 'ربط ERP', label: 'مفتاح توقيع الـ Webhook', kind: 'secret', help: 'بنوقّع كل رسالة HMAC-SHA256 بهاد المفتاح.' },
+  { key: 'erpGlAccounts', group: 'ربط ERP', label: 'حساب الإيراد لكل نوع خدمة', kind: 'lineMap', help: 'مثلاً رقم الـ G/L Account بـ SAP.' },
+  { key: 'erpTaxCodes', group: 'ربط ERP', label: 'رمز الضريبة بالـ ERP لكل فئة', kind: 'categoryMap', help: 'مثلاً Tax Code بـ SAP (O1, S1…).' },
+  { key: 'erpCostCenter', group: 'ربط ERP', label: 'مركز الكلفة', kind: 'text' },
 ];
 
 let current: Settings = structuredClone(DEFAULTS);
@@ -201,7 +273,9 @@ export const cfg = (): Settings => current;
 export function loadSettings(db: Db): Settings {
   const merged = structuredClone(DEFAULTS) as any;
   for (const row of db.all<{ key: string; value: string }>('SELECT key, value FROM settings')) {
-    if (row.key in DEFAULTS) merged[row.key] = JSON.parse(row.value);
+    if (!(row.key in DEFAULTS)) continue;
+    const v = JSON.parse(row.value);
+    merged[row.key] = SECRET_KEYS.includes(row.key as keyof Settings) && typeof v === 'string' && v ? decrypt(v) : v;
   }
   current = merged;
   return current;
@@ -234,6 +308,33 @@ function validate(meta: SettingMeta, v: unknown, db: Db): unknown {
     case 'dates':
       if (!Array.isArray(v) || v.some((d) => typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d))) fail('التواريخ لازم تكون YYYY-MM-DD');
       return [...new Set(v as string[])].sort();
+    case 'url': {
+      if (typeof v !== 'string') fail('لازم يكون رابط');
+      if (v && !/^https:\/\/[^\s]+$/.test(v as string)) fail('لازم يبدأ بـ https://');
+      return (v as string).trim();
+    }
+    case 'secret':
+      if (typeof v !== 'string' || (v as string).length > 500) fail('قيمة غير صحيحة');
+      return (v as string).trim();
+    case 'taxMap': {
+      const m = v as Record<string, { category: string; rate: number }>;
+      if (!m || typeof m !== 'object') fail('قيمة غير صحيحة');
+      for (const line of TAX_LINES) {
+        const r = m[line];
+        if (!r || !TAX_CATEGORIES.includes(r.category as TaxCategory)) fail(`فئة ضريبة غير صحيحة لـ ${line}`);
+        if (typeof r.rate !== 'number' || r.rate < 0 || r.rate > 100) fail(`نسبة غير صحيحة لـ ${line}`);
+        if (r.category !== 'S' && r.rate !== 0) fail(`الفئة ${r.category} نسبتها لازم 0 (${line})`);
+        if (r.category === 'S' && r.rate === 0) fail(`الفئة S لازم إلها نسبة (${line})`);
+      }
+      return Object.fromEntries(TAX_LINES.map((l) => [l, { category: m[l].category, rate: m[l].rate }]));
+    }
+    case 'lineMap':
+    case 'categoryMap': {
+      const keys: readonly string[] = meta.kind === 'lineMap' ? TAX_LINES : TAX_CATEGORIES;
+      const m = v as Record<string, unknown>;
+      if (!m || typeof m !== 'object' || keys.some((k) => typeof (m[k] ?? '') !== 'string')) fail('قيمة غير صحيحة');
+      return Object.fromEntries(keys.map((k) => [k, String(m[k] ?? '').trim()]));
+    }
     case 'staff':
     case 'staffList': {
       const ids = meta.kind === 'staff' ? (v === null ? [] : [v]) : v;
@@ -267,9 +368,10 @@ export function saveSettings(db: Db, patch: Record<string, unknown>, actorId: nu
       db.run(
         `INSERT INTO settings (key, value, updated_by, updated_at) VALUES (?, ?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-        key, JSON.stringify(next[key]), actorId, new Date().toISOString(),
+        key, JSON.stringify(SECRET_KEYS.includes(key as keyof Settings) && next[key] ? encrypt(next[key]) : next[key]), actorId, new Date().toISOString(),
       );
-      db.insert('settings_history', { key, old_value: JSON.stringify(before[key]), new_value: JSON.stringify(next[key]), changed_by: actorId });
+      const shown = (x: unknown) => JSON.stringify(SECRET_KEYS.includes(key as keyof Settings) ? (x ? '••••' : '') : x);
+      db.insert('settings_history', { key, old_value: shown(before[key]), new_value: shown(next[key]), changed_by: actorId });
     }
   });
   loadSettings(db);
@@ -297,4 +399,11 @@ export function escalationRecipients(to: 'MEDICAL_DIRECTOR' | 'ONCALL_DOCTOR' | 
   if (to === 'MEDICAL_DIRECTOR' && s.medicalDirectorId) return [`staff:${s.medicalDirectorId}`];
   if (to === 'ONCALL_DOCTOR' && s.onCallDoctorIds.length) return s.onCallDoctorIds.map((id) => `staff:${id}`);
   return [`role:${to}`];
+}
+
+/** Settings as the owner's screen may see them: secrets replaced by a mask. */
+export function publicView(s: Settings = cfg()): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...s };
+  for (const k of SECRET_KEYS) out[k] = maskSecret(s[k] as string);
+  return out;
 }

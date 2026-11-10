@@ -4,6 +4,7 @@ import { api, fmtTime, isoToLocal, jod, localToIso, setPatientToken, type Servic
 import { Empty, Field, Pill, useAction, useLoad } from '../ui';
 import { LiveStamp, usePolling, useUpdatedAt } from '../live';
 import { RatePrompts } from './PatientFeedback';
+import { InvoiceDoc } from '../InvoiceDoc';
 
 const TOKEN_KEY = 'hc.patientToken';
 export const loadPatientToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
@@ -225,6 +226,8 @@ function NewRequest({ onDone }: { onDone: () => void }) {
 // ---- My file ---------------------------------------------------------------------
 function MyFile({ me, reload }: { me: any; reload: () => void }) {
   const { busy, run } = useAction();
+  const [invOpen, setInvOpen] = useState<number | null>(null);
+  const invDoc = useLoad(() => (invOpen ? api.get<any>(`/me/invoices/${invOpen}/document`) : Promise.resolve(null)), [invOpen]);
   const [f, setF] = useState({
     dob: me.dob ?? '', gender: me.gender ?? '', address: me.address ?? '', emergencyContact: me.emergencyContact ?? '', preferredStaffGender: me.preferredStaffGender ?? '',
     lat: me.lat as number | null, lng: me.lng as number | null,
@@ -279,9 +282,12 @@ function MyFile({ me, reload }: { me: any; reload: () => void }) {
         {!me.invoices.length && <Empty>ما في فواتير.</Empty>}
         <ul className="list">
           {me.invoices.map((i: any) => (
-            <li key={i.id} className="list-row">
-              <div><span className="mono">{i.invoice_no}</span><div className="small muted">{i.period_from ? `${i.period_from.slice(0, 10)} ← ${i.period_to.slice(0, 10)}` : fmtTime(i.created_at)}</div></div>
-              <div className="row-tight"><span className="mono">{jod(i.patient_total - i.paid)}</span><Pill status={i.status} /></div>
+            <li key={i.id}>
+              <button className="list-row plain" onClick={() => setInvOpen(invOpen === i.id ? null : i.id)} aria-expanded={invOpen === i.id}>
+                <div><span className="mono">{i.invoice_no}</span><div className="small muted">{i.period_from ? `${i.period_from.slice(0, 10)} ← ${i.period_to.slice(0, 10)}` : fmtTime(i.created_at)}</div></div>
+                <div className="row-tight"><span className="mono">{jod(i.patient_total - i.paid)}</span><Pill status={i.status} /></div>
+              </button>
+              {invOpen === i.id && invDoc.data && <InvoiceDoc doc={invDoc.data} />}
             </li>
           ))}
         </ul>

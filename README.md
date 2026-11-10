@@ -7,6 +7,7 @@ An integrated home-care system covering intake (app and call center), coordinato
 | File | What it is |
 |---|---|
 | [`docs/workflow-bpmn.html`](docs/workflow-bpmn.html) | BPMN 2.0 swimlane diagram of the full process. Click a step to see who does it and which system module covers it. |
+| [`docs/erp-and-tax-integration.md`](docs/erp-and-tax-integration.md) | Tax on invoices, Jordan e-invoicing (JoFotara) with QR, and the ERP API (SAP mapping, webhooks, API keys). |
 | [`docs/business-requirements.md`](docs/business-requirements.md) | Business requirements: roles and permissions, data model, state machines, business rules, gaps in the original workflow, KPIs, and a phased roadmap. |
 
 ## Run it
@@ -47,6 +48,8 @@ Every business rule with a number or a choice is configurable by the owner (ADMI
 | Payment & billing | cash direct services paid at the door or before booking, nursing billed in arrears or in advance (planned roster, settled against attendance on the next run), rounding, late tolerance |
 | Staff & shifts | staff gender preference (off / warn / block), max hours per 7 days, minimum rest, consecutive 24 h shifts, check-in grace, GPS radius |
 | Clinical | medical director, on-call doctors, critical-result and NEWS2 response times, recheck time, auto-release of normal results (0 = doctor review only), consent hard stop, age of majority |
+| Tax & e-invoicing | prices include tax, tax category and rate per service line, JoFotara on/mock/off, endpoint, Client ID and Secret Key (encrypted), seller TIN, name and income-source sequence, auto-submit, cash/receivable type |
+| ERP | webhook URL and signing secret, revenue G/L account per line, ERP tax code per category, cost center |
 | SLA, patient app, feedback | SLA targets on the coordinator board, OTP validity and attempts, session length, low-rating threshold and rating window |
 
 ## Backend (`backend/`)

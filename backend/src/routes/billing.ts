@@ -4,7 +4,8 @@ import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { buildInvoiceLines, nextPeriod, previousPeriod, rentalDaysInPeriod, type BillableSource, type Period } from '../domain/billing.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
-import { createInvoice } from './visits.js';
+import { createInvoice, issueInvoice } from './visits.js';
+import { recordPayment } from '../payments.js';
 import { cfg } from '../settings.js';
 
 function unitPrice(db: Db, code: string, payerId: number | null): number {
@@ -125,10 +126,16 @@ export function billingRoutes(db: Db): Router {
 
   r.get('/invoices', wrap((req) => {
     const patientId = Number(req.query.patientId) || null;
-    return db.all('SELECT * FROM invoices WHERE (? IS NULL OR patient_id = ?) ORDER BY id DESC LIMIT 200', patientId, patientId);
+    requireRole(db, req, 'FINANCE', 'COORDINATOR');
+    return db.all(
+      `SELECT i.*, x.status AS einvoice_status, p.full_name FROM invoices i JOIN patients p ON p.id = i.patient_id
+       LEFT JOIN einvoices x ON x.invoice_id = i.id WHERE (? IS NULL OR i.patient_id = ?) ORDER BY i.id DESC LIMIT 200`,
+      patientId, patientId,
+    );
   }));
 
   r.get('/invoices/:id', wrap((req) => {
+    requireRole(db, req, 'FINANCE', 'COORDINATOR');
     const inv = getOr404(db, 'invoices', req.params.id, 'Invoice');
     return {
       ...inv,
@@ -148,7 +155,7 @@ export function billingRoutes(db: Db): Router {
       inv.id,
     );
     if (mismatch) throw new HttpError(409, 'Invoice hours do not match attendance (BR-72)');
-    db.update('invoices', inv.id, { status: 'ISSUED' });
+    issueInvoice(db, inv.id, now(req));
     notify(db, `patient:${inv.patient_id}`, 'SMS', `Invoice ${inv.invoice_no}: ${(inv.patient_total / 1000).toFixed(3)} JOD`);
     return { status: 'ISSUED' };
   }));
@@ -159,11 +166,7 @@ export function billingRoutes(db: Db): Router {
     const inv = getOr404(db, 'invoices', req.params.id, 'Invoice');
     if (!['ISSUED', 'PARTIALLY_PAID'].includes(inv.status)) throw new HttpError(409, `Invoice is ${inv.status}`);
     const out = db.tx(() => {
-      const id = db.insert('payments', { invoice_id: inv.id, method: body.method, amount: body.amount, reference: body.reference, collected_by: staff.id });
-      const paid = db.get<{ s: number }>('SELECT SUM(amount) AS s FROM payments WHERE invoice_id = ?', inv.id)!.s;
-      const status = paid >= inv.patient_total ? 'PAID' : 'PARTIALLY_PAID';
-      db.update('invoices', inv.id, { status });
-      return { id, status, paid, balance: Math.max(0, inv.patient_total - paid) };
+      return recordPayment(db, inv.id, { method: body.method, amount: body.amount, reference: body.reference, collectedBy: staff.id });
     });
     res.status(201).json(out);
   }));

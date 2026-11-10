@@ -41,6 +41,36 @@ export class Db {
     add('patients', 'preferred_staff_gender', "TEXT CHECK (preferred_staff_gender IN ('M','F'))");
     add('shifts', 'advance_minutes', 'INTEGER');
     add('shifts', 'adjusted_at', 'TEXT');
+    // Tax on invoices and ERP integration.
+    add('invoice_lines', 'service_code', 'TEXT');
+    add('invoice_lines', 'tax_line', 'TEXT');
+    add('invoice_lines', 'tax_category', 'TEXT');
+    add('invoice_lines', 'tax_rate', 'REAL');
+    add('invoice_lines', 'net_amount', 'INTEGER');
+    add('invoice_lines', 'tax_amount', 'INTEGER');
+    add('invoices', 'subtotal', 'INTEGER');
+    add('invoices', 'tax_total', 'INTEGER');
+    add('invoices', 'issued_at', 'TEXT');
+    add('invoices', 'erp_ref', 'TEXT');
+    add('invoices', 'erp_synced_at', 'TEXT');
+    add('invoices', 'updated_at', 'TEXT');
+    add('payers', 'erp_code', 'TEXT');
+    add('patients', 'erp_code', 'TEXT');
+    add('patients', 'updated_at', 'TEXT');
+    this.raw.exec(`UPDATE invoices SET updated_at = created_at WHERE updated_at IS NULL; UPDATE patients SET updated_at = created_at WHERE updated_at IS NULL;`);
+    // Keep updated_at current so the ERP can pull changes since its last sync.
+    this.raw.exec(`
+      CREATE TRIGGER IF NOT EXISTS invoices_touch AFTER UPDATE ON invoices
+        WHEN NEW.updated_at IS OLD.updated_at
+        BEGIN UPDATE invoices SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+      CREATE TRIGGER IF NOT EXISTS invoices_touch_insert AFTER INSERT ON invoices
+        BEGIN UPDATE invoices SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+      CREATE TRIGGER IF NOT EXISTS payments_touch_invoice AFTER INSERT ON payments
+        BEGIN UPDATE invoices SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.invoice_id; END;
+      CREATE TRIGGER IF NOT EXISTS patients_touch AFTER UPDATE ON patients
+        WHEN NEW.updated_at IS OLD.updated_at
+        BEGIN UPDATE patients SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+    `);
   }
 
   get<T = Row>(sql: string, ...params: SQLInputValue[]): T | undefined {

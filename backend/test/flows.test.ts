@@ -184,7 +184,7 @@ describe('home care path', () => {
     expect(run.body.created).toHaveLength(1);
     const again = await post('/api/billing/run', { asOf: '2026-11-10T06:00:00Z' }, FINANCE);
     expect(again.body.created).toHaveLength(0);
-    const inv = (await request(app).get(`/api/invoices/${run.body.created[0]}`)).body;
+    const inv = (await request(app).get(`/api/invoices/${run.body.created[0]}`).set("x-staff-id", String(FINANCE))).body;
     expect(inv.lines).toHaveLength(2);
     expect(inv.total).toBe(Math.round(11.25 * 6_000) + 12 * 6_000);
     expect((await post(`/api/invoices/${inv.id}/issue`, {}, FINANCE)).body.status).toBe('ISSUED');

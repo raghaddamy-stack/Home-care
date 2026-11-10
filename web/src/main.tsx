@@ -7,10 +7,11 @@ import { Coordinator } from './screens/Coordinator';
 import { FieldApp } from './screens/FieldApp';
 import { Finance } from './screens/Finance';
 import { Settings } from './screens/Settings';
+import { Integrations } from './screens/Integrations';
 import { loadPatientToken, PatientApp } from './screens/PatientApp';
 import './styles.css';
 
-type View = 'board' | 'intake' | 'field' | 'finance' | 'settings';
+type View = 'board' | 'intake' | 'field' | 'finance' | 'settings' | 'integrations';
 
 const VIEWS: Record<View, { label: string; roles: string[] }> = {
   board: { label: 'لوحة المنسق', roles: ['COORDINATOR', 'SUPERVISOR', 'ADMIN'] },
@@ -18,6 +19,7 @@ const VIEWS: Record<View, { label: string; roles: string[] }> = {
   field: { label: 'تطبيق الكادر', roles: ['NURSE', 'DOCTOR', 'LAB_TECH', 'RADIOGRAPHER', 'DRIVER'] },
   finance: { label: 'المالية', roles: ['FINANCE', 'ADMIN'] },
   settings: { label: 'إعدادات المالك', roles: ['ADMIN'] },
+  integrations: { label: 'الربط مع الأنظمة', roles: ['ADMIN'] },
 };
 
 function Login({ onPick, onPatient }: { onPick: (s: Staff) => void; onPatient: () => void }) {
@@ -85,6 +87,7 @@ function App() {
         {view === 'field' && <FieldApp me={me} />}
         {view === 'finance' && <Finance />}
         {view === 'settings' && <Settings />}
+        {view === 'integrations' && <Integrations />}
       </main>
     </div>
   );

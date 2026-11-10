@@ -7,7 +7,10 @@ interface Meta {
   key: string; group: string; label: string; help?: string; kind: string;
   min?: number; max?: number; step?: number; unit?: string; options?: { value: string; label: string }[]; roles?: string[]; default: unknown;
 }
-interface Payload { values: Record<string, any>; meta: Meta[]; staff: { id: number; name: string; role: string }[]; history: any[] }
+interface Payload { values: Record<string, any>; meta: Meta[]; staff: { id: number; name: string; role: string }[]; history: any[]; warnings?: string[] }
+
+const LINES_AR: Record<string, string> = { LAB: 'المختبر', IMG: 'الأشعة', DEV: 'الأجهزة', DOC: 'زيارة الطبيب', NRS: 'التمريض', FEE: 'رسوم إلغاء / غياب' };
+const CAT_AR: Record<string, string> = { S: 'خاضع (S)', Z: 'صفر (Z)', O: 'معفى (O)' };
 
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -21,6 +24,10 @@ function display(m: Meta, v: any, staff: Payload['staff']): string {
     case 'dates': return (v as string[]).join('، ');
     case 'staff': return staff.find((s) => s.id === v)?.name ?? `#${v}`;
     case 'staffList': return (v as number[]).map((id) => staff.find((s) => s.id === id)?.name ?? `#${id}`).join('، ');
+    case 'secret': return typeof v === 'string' ? (v ? 'قيمة جديدة' : 'فاضي') : v.set ? `محفوظ (…${v.last4})` : 'غير مدخل';
+    case 'taxMap': return Object.entries(v as Record<string, any>).map(([k, r]) => `${LINES_AR[k] ?? k}: ${r.category}${r.category === 'S' ? ` ${r.rate}%` : ''}`).join('، ');
+    case 'lineMap': case 'categoryMap': return Object.entries(v as Record<string, string>).filter(([, x]) => x).map(([k, x]) => `${LINES_AR[k] ?? k}: ${x}`).join('، ') || '—';
+    case 'text': case 'url': return v || '—';
     default: return `${v}${m.unit ? ` ${m.unit}` : ''}`;
   }
 }
@@ -71,6 +78,46 @@ function Control({ m, value, onChange, staff }: { m: Meta; value: any; onChange:
           })}
         </div>
       );
+    case 'text':
+    case 'url':
+      return <input id={id} dir={m.kind === 'url' ? 'ltr' : undefined} value={value} onChange={(e) => onChange(e.target.value)} placeholder={m.kind === 'url' ? 'https://' : ''} />;
+    case 'secret':
+      return (
+        <div className="stack">
+          <input id={id} type="password" dir="ltr" autoComplete="new-password" value={typeof value === 'string' ? value : ''}
+            placeholder={typeof value === 'object' && value?.set ? `محفوظ (…${value.last4}) · اكتب قيمة جديدة لتغييره` : 'أدخل القيمة'}
+            onChange={(e) => onChange(e.target.value)} />
+        </div>
+      );
+    case 'taxMap':
+      return (
+        <div className="map-grid">
+          {Object.entries(value as Record<string, { category: string; rate: number }>).map(([k, r]) => (
+            <div key={k} className="map-row">
+              <span>{LINES_AR[k] ?? k}</span>
+              <select aria-label={`فئة ${LINES_AR[k]}`} value={r.category} onChange={(e) => onChange({ ...value, [k]: { category: e.target.value, rate: e.target.value === 'S' ? (r.rate || 16) : 0 } })}>
+                {['S', 'Z', 'O'].map((c) => <option key={c} value={c}>{CAT_AR[c]}</option>)}
+              </select>
+              <div className="unit-input">
+                <input type="number" min={0} max={100} aria-label={`نسبة ${LINES_AR[k]}`} disabled={r.category !== 'S'} value={r.rate} onChange={(e) => onChange({ ...value, [k]: { ...r, rate: Number(e.target.value) } })} />
+                <span>%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    case 'lineMap':
+    case 'categoryMap':
+      return (
+        <div className="map-grid">
+          {Object.entries(value as Record<string, string>).map(([k, x]) => (
+            <div key={k} className="map-row two">
+              <span>{m.kind === 'lineMap' ? LINES_AR[k] ?? k : CAT_AR[k] ?? k}</span>
+              <input dir="ltr" aria-label={k} value={x} onChange={(e) => onChange({ ...value, [k]: e.target.value })} />
+            </div>
+          ))}
+        </div>
+      );
     default:
       return (
         <div className="unit-input">
@@ -108,7 +155,7 @@ export function Settings() {
   const g = group ?? groups[0];
   if (data.error) return <p className="error">{data.error}</p>;
   if (!data.data) return <p className="muted">تحميل…</p>;
-  const { meta, staff, history, values } = data.data;
+  const { meta, staff, history, values, warnings } = data.data;
   const changed = meta.filter((m) => JSON.stringify(draft[m.key]) !== JSON.stringify(values[m.key]));
   const labelOf = (k: string) => meta.find((m) => m.key === k)?.label ?? k;
   const pretty = (k: string, raw: string | null) => { const m = meta.find((x) => x.key === k); return m && raw != null ? display(m, JSON.parse(raw), staff) : raw ?? '—'; };
@@ -117,7 +164,7 @@ export function Settings() {
     <div className="settings">
       <aside className="settings-nav" aria-label="أقسام الإعدادات">
         {groups.map((x) => {
-          const n = meta.filter((m) => m.group === x && JSON.stringify(values[m.key]) !== JSON.stringify(m.default)).length;
+          const n = meta.filter((m) => m.group === x && (m.kind === 'secret' ? !!values[m.key]?.set : JSON.stringify(values[m.key]) !== JSON.stringify(m.default))).length;
           return (
             <button key={x} className={x === g ? 'on' : ''} onClick={() => setGroup(x)}>
               <span>{x}</span>{n > 0 && <span className="count" title="معدّل عن الافتراضي">{n}</span>}
@@ -130,13 +177,14 @@ export function Settings() {
         <div className="card-head">
           <div>
             <h2>{g}</h2>
+            {warnings?.map((w) => <p key={w} className="notice warn small">{w}</p>)}
             <p className="small muted">أي تغيير بيطبّق على العمليات الجديدة مباشرة، وما بيغيّر فواتير أو عروض أسعار طلعت قبل.</p>
           </div>
         </div>
         <div className="settings-list">
           {meta.filter((m) => m.group === g).map((m) => {
             const dirty = JSON.stringify(draft[m.key]) !== JSON.stringify(values[m.key]);
-            const custom = JSON.stringify(values[m.key]) !== JSON.stringify(m.default);
+            const custom = m.kind === 'secret' ? !!values[m.key]?.set : JSON.stringify(values[m.key]) !== JSON.stringify(m.default);
             return (
               <div key={m.key} className={`setting ${dirty ? 'dirty' : ''}`}>
                 <div className="setting-text">

@@ -403,3 +403,58 @@ CREATE TABLE IF NOT EXISTS settings_history (
   changed_by INTEGER REFERENCES staff(id),
   at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- E-invoices sent to the tax authority (JoFotara). One row per invoice; uuid and ICV are fixed at first attempt.
+CREATE TABLE IF NOT EXISTS einvoices (
+  id INTEGER PRIMARY KEY,
+  invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id),
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACCEPTED','REJECTED','FAILED')),
+  uuid TEXT NOT NULL,
+  icv INTEGER NOT NULL,
+  type_code TEXT NOT NULL,
+  xml TEXT,
+  qr TEXT,
+  einv_number TEXT,
+  message TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  submitted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Outbox of business events for the ERP: delivered by webhook (if configured) and readable by polling.
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id INTEGER PRIMARY KEY,
+  event TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','FAILED','SKIPPED')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  sent_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- API keys for ERP / external systems. Only a hash of the key is stored.
+CREATE TABLE IF NOT EXISTS api_clients (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  scopes TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES staff(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  last_used_at TEXT
+);
+
+-- Idempotency for ERP writes: the same Idempotency-Key returns the first response.
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  client_id INTEGER NOT NULL REFERENCES api_clients(id),
+  key TEXT NOT NULL,
+  response TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (client_id, key)
+);

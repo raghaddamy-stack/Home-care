@@ -5,6 +5,9 @@ import { cfg } from '../settings.js';
 import type { Db, Row } from '../db.js';
 import { distanceMetres } from '../domain/shifts.js';
 import { buildInvoiceLines } from '../domain/billing.js';
+import { splitShares, taxFor, taxLineFor } from '../domain/tax.js';
+import { onInvoiceIssued } from '../einvoice/service.js';
+import { recordPayment } from '../payments.js';
 import { noShowFee, prepaymentRequired } from '../domain/patientPolicy.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { noShowDates, setStatus, visitFee } from './requests.js';
@@ -17,23 +20,54 @@ function nextInvoiceNo(db: Db): string {
   return `INV-${String(n).padStart(6, '0')}`;
 }
 
+export interface InvoiceLineInput {
+  sourceType: string;
+  sourceId: number;
+  description: string;
+  qty: number;
+  unitPrice: number;
+  amount: number;
+  payerAmount: number;
+  patientAmount: number;
+  serviceCode?: string;
+}
+
+/**
+ * Create an invoice (DRAFT). Each line gets its tax from owner settings: with tax-inclusive prices the
+ * amounts stay as quoted and the tax is extracted; otherwise tax is added and split payer/patient pro rata.
+ */
 export function createInvoice(
   db: Db,
   head: { patient_id: number; kind: 'VISIT' | 'PERIODIC' | 'FINAL'; episode_id?: number; request_id?: number; period_from?: Date; period_to?: Date },
-  lines: ReturnType<typeof buildInvoiceLines>,
+  lines: InvoiceLineInput[],
 ): number {
-  const sum = (k: 'amount' | 'payerAmount' | 'patientAmount') => lines.reduce((a, l) => a + l[k], 0);
+  const priced = lines.map((l) => {
+    const svcLine = l.serviceCode ? db.get<{ line: string }>('SELECT line FROM services WHERE code = ?', l.serviceCode)?.line : null;
+    const t = taxFor(taxLineFor(l.sourceType, svcLine), l.amount);
+    const { payerGross, patientGross } = splitShares(t, l.payerAmount, l.patientAmount);
+    return { ...l, t, payerGross, patientGross };
+  });
+  const sum = (f: (x: (typeof priced)[number]) => number) => priced.reduce((a, x) => a + f(x), 0);
   const id = db.insert('invoices', {
     invoice_no: nextInvoiceNo(db), ...head,
-    total: sum('amount'), payer_total: sum('payerAmount'), patient_total: sum('patientAmount'),
+    subtotal: sum((x) => x.t.net), tax_total: sum((x) => x.t.tax),
+    total: sum((x) => x.t.gross), payer_total: sum((x) => x.payerGross), patient_total: sum((x) => x.patientGross),
   });
-  for (const l of lines) {
+  for (const x of priced) {
     db.insert('invoice_lines', {
-      invoice_id: id, source_type: l.sourceType, source_id: l.sourceId, description: l.description,
-      qty: l.qty, unit_price: l.unitPrice, amount: l.amount, payer_amount: l.payerAmount, patient_amount: l.patientAmount,
+      invoice_id: id, source_type: x.sourceType, source_id: x.sourceId, description: x.description,
+      qty: x.qty, unit_price: x.unitPrice, amount: x.t.gross, payer_amount: x.payerGross, patient_amount: x.patientGross,
+      service_code: x.serviceCode, tax_line: x.t.taxLine, tax_category: x.t.category, tax_rate: x.t.rate,
+      net_amount: x.t.net, tax_amount: x.t.tax,
     });
   }
   return id;
+}
+
+/** Issue an invoice: it becomes final, the e-invoice is queued (owner setting) and the ERP is told. */
+export function issueInvoice(db: Db, invoiceId: number, at: Date = new Date()) {
+  db.update('invoices', invoiceId, { status: 'ISSUED', issued_at: at });
+  onInvoiceIssued(db, invoiceId);
 }
 
 function ownVisit(db: Db, req: any): { visit: Row; staff: Row; request: Row } {
@@ -150,21 +184,19 @@ export function visitRoutes(db: Db): Router {
       const quote = db.get(`SELECT * FROM quotes WHERE request_id = ? AND status = 'ACCEPTED'`, request.id);
       if (!quote) throw new HttpError(409, 'No accepted quote');
       const lines = (JSON.parse(quote.lines) as any[]).map((l) => ({
-        sourceType: 'VISIT' as const, sourceId: visit.id, description: l.serviceCode, qty: l.qty, unitPrice: Math.round(l.net / l.qty),
+        sourceType: 'VISIT' as const, sourceId: visit.id, description: l.serviceCode, serviceCode: l.serviceCode, qty: l.qty, unitPrice: Math.round(l.net / l.qty),
         amount: l.net, payerAmount: l.payerShare, patientAmount: l.patientShare,
       }));
       const invoiceId = createInvoice(db, { patient_id: request.patient_id, kind: 'VISIT', request_id: request.id }, lines);
-      db.update('invoices', invoiceId, { status: 'ISSUED' });
+      issueInvoice(db, invoiceId, at);
       // Money taken before the visit (BR-24 / BR-15) settles the invoice first.
       for (const pre of db.all(`SELECT * FROM prepayments WHERE request_id = ? AND applied_invoice_id IS NULL`, request.id)) {
-        db.insert('payments', { invoice_id: invoiceId, method: pre.method, amount: pre.amount, reference: pre.reference ?? `prepayment #${pre.id}`, collected_by: pre.collected_by, at: pre.at });
+        recordPayment(db, invoiceId, { method: pre.method, amount: pre.amount, reference: pre.reference ?? `prepayment #${pre.id}`, collectedBy: pre.collected_by, at: pre.at });
         db.update('prepayments', pre.id, { applied_invoice_id: invoiceId });
       }
       if (body.payment) {
-        db.insert('payments', { invoice_id: invoiceId, method: body.payment.method, amount: body.payment.amount, reference: body.payment.reference, collected_by: staff.id });
+        recordPayment(db, invoiceId, { method: body.payment.method, amount: body.payment.amount, reference: body.payment.reference, collectedBy: staff.id });
       }
-      const paid = db.get<{ s: number | null }>('SELECT SUM(amount) AS s FROM payments WHERE invoice_id = ?', invoiceId)!.s ?? 0;
-      if (paid > 0) db.update('invoices', invoiceId, { status: paid >= quote.patient_total ? 'PAID' : 'PARTIALLY_PAID' });
 
       db.update('visits', visit.id, { status: 'COMPLETED', completed_at: at });
       setStatus(db, request, 'COMPLETED', staff.id);
