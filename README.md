@@ -11,6 +11,12 @@ An integrated home-care system covering intake (app and call center), coordinato
 
 ## Run it
 
+**Quickest:** open the repo in GitHub Codespaces (Code → Codespaces → Create codespace on this branch). It installs, builds and opens the app on port 3000 by itself.
+
+**On your computer** (Node.js 22+): `./start.sh` (macOS/Linux) or `start.bat` (Windows), then open http://localhost:3000.
+
+**Manually:**
+
 ```bash
 cd backend && npm install && cd ../web && npm install && npm run build
 cd ../backend && npm run dev     # API + web console on http://localhost:3000

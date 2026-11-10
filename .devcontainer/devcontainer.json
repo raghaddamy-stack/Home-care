@@ -1,0 +1,8 @@
+{
+  "name": "Home Care",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "postCreateCommand": "cd backend && npm ci && cd ../web && npm ci && npm run build",
+  "postAttachCommand": "cd backend && npm start",
+  "forwardPorts": [3000],
+  "portsAttributes": { "3000": { "label": "Home Care", "onAutoForward": "openBrowser" } }
+}
