@@ -1,8 +1,9 @@
 // Mobile-first app for field staff: visits, nurse shifts (vitals / NEWS2 / notes / handover),
 // doctor case list (care plan, orders, results), and department worklists.
 import { useState } from 'react';
-import { api, escalationAr, fmtTime, jod, type Service, type Staff } from '../api';
-import { Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { api, escalationAr, fmtTime, jod, ROLE_AR, staffName, type Service, type Staff } from '../api';
+import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
+import { Icon } from '../icons';
 
 type Pos = { lat: number; lng: number };
 
@@ -71,23 +72,26 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
   }, 'تم تسجيل الوصول');
 
   return (
-    <li className="visit">
+    <li className={`visit${v.status !== 'SCHEDULED' ? ' is-now' : ''}`}>
       <div className="visit-head" onClick={() => setOpen(!open)}>
         <div>
-          <strong>{v.full_name}</strong> <span className="muted small">{KIND_AR[v.kind]}</span>
-          <div className="small muted">{fmtTime(v.scheduled_at)} · {v.address}</div>
+          <span className="small muted">{KIND_AR[v.kind]}</span>
+          <strong>{v.full_name}</strong>
+          <div className="visit-meta">
+            <span><Icon name="clock" size={15} />{fmtTime(v.scheduled_at)}</span>
+            {v.address && <span><Icon name="pin" size={15} />{v.address}</span>}
+          </div>
         </div>
         <Pill status={v.status} />
       </div>
       {v.status === 'SCHEDULED' && (
-        <button className="primary block" disabled={busy} onClick={() => run(async () => { await api.post(`/visits/${v.id}/dispatch`); reload(); }, 'المريض وصله إشعار إنك بالطريق')}>أنا بالطريق</button>
+        <button className="primary block" disabled={busy} onClick={() => run(async () => { await api.post(`/visits/${v.id}/dispatch`); reload(); }, 'المريض وصله إشعار إنك بالطريق')}><Icon name="send" />أنا بالطريق</button>
       )}
       {v.status === 'DISPATCHED' && (
         <div className="stack">
+          <div className="visit-status"><Icon name="pin" />لما توصل سجّل حضورك بالموقع، أو اطلب رمز الزيارة من المريض.</div>
           {gps.manualFields}
-          <div className="row">
-            <Field label="أو رمز الزيارة من المريض"><input inputMode="numeric" value={otp} onChange={(e) => setOtp(e.target.value)} maxLength={4} /></Field>
-          </div>
+          <Field label="رمز الزيارة من المريض (اختياري)"><input className="mono" inputMode="numeric" value={otp} onChange={(e) => setOtp(e.target.value)} maxLength={4} placeholder="• • • •" /></Field>
           {!v.has_consent && (
             <div className="notice warn stack">
               <label className="check"><input type="checkbox" checked={consented} onChange={(e) => setConsented(e.target.checked)} /> ما في موافقة على الملف: المريض أو ولي الأمر وقّع الموافقة العامة على العلاج{v.kind === 'IMAGING' ? ' وموافقة التصوير' : ''} على الجهاز</label>
@@ -104,7 +108,7 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
               )}
             </div>
           )}
-          <button className="primary block" disabled={busy} onClick={checkIn}>وصلت · تسجيل الحضور</button>
+          <button className="primary block cta-sticky" disabled={busy} onClick={checkIn}><Icon name="check" />وصلت · تسجيل الحضور</button>
           <button className="ghost block" disabled={busy} onClick={() => run(async () => {
             const r = await api.post<{ fee: number }>(`/visits/${v.id}/no-show`);
             reload();
@@ -112,7 +116,8 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
           }, 'تم تسجيل No-show وإبلاغ المنسق')}>المريض مش موجود</button>
         </div>
       )}
-      {v.status === 'CHECKED_IN' && !open && <button className="primary block" onClick={() => setOpen(true)}>إنهاء الزيارة</button>}
+      {v.status === 'CHECKED_IN' && !open && <button className="primary block" onClick={() => setOpen(true)}><Icon name="check" />إنهاء الزيارة</button>}
+      {v.status === 'CHECKED_IN' && open && !req.data && <Loading />}
       {v.status === 'CHECKED_IN' && open && req.data && route === 'DIRECT' && (
         <form className="stack" onSubmit={(e) => {
           e.preventDefault();
@@ -139,7 +144,7 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
               <label className="check"><input type="checkbox" checked={signed} onChange={(e) => setSigned(e.target.checked)} required /> العائلة تدرّبت ووقّعت نموذج الاستلام</label>
             </div>
           )}
-          <div className="notice ok">المستحق على المريض: <strong className="mono">{jod(due)}</strong></div>
+          <div className="notice ok"><div className="list-row"><span>المستحق على المريض</span><strong className="mono" style={{ fontSize: 20 }}>{jod(due)}</strong></div></div>
           <div className="grid-2">
             <Field label="طريقة الدفع">
               <select value={method} onChange={(e) => setMethod(e.target.value)}>
@@ -148,7 +153,7 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
             </Field>
             <Field label="المبلغ المحصّل (د.أ)"><input inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} placeholder={due ? (due / 1000).toFixed(3) : ''} /></Field>
           </div>
-          <button className="primary block" disabled={busy}>حفظ وإنهاء</button>
+          <button className="primary block cta-sticky" disabled={busy}><Icon name="check" />حفظ وإنهاء الزيارة</button>
         </form>
       )}
       {v.status === 'CHECKED_IN' && open && req.data && route !== 'DIRECT' && (
@@ -172,7 +177,7 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
             <Field label="Braden (قرح الفراش)" hint="6–23، أقل = خطر أعلى"><input type="number" min={6} max={23} value={braden} onChange={(e) => setBraden(e.target.value)} /></Field>
           </div>
           <Field label="الحساسية" hint="افصل بفاصلة"><input value={allergies} onChange={(e) => setAllergies(e.target.value)} /></Field>
-          <div className="seg" role="radiogroup">
+          <div className="seg" role="radiogroup" aria-label="القرار">
             <button type="button" className={suitable ? 'on' : ''} onClick={() => setSuitable(true)}>مناسبة للرعاية المنزلية</button>
             <button type="button" className={!suitable ? 'on' : ''} onClick={() => setSuitable(false)}>تحويل لمستشفى</button>
           </div>
@@ -183,7 +188,7 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
           ) : (
             <Field label="سبب التحويل"><input value={refer} onChange={(e) => setRefer(e.target.value)} required /></Field>
           )}
-          <button className="primary block" disabled={busy}>حفظ</button>
+          <button className="primary block cta-sticky" disabled={busy}><Icon name="check" />حفظ التقييم</button>
         </form>
       )}
     </li>
@@ -192,16 +197,17 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
 
 function Visits({ me }: { me: Staff }) {
   const list = useLoad(() => api.get<any[]>(`/visits?staffId=${me.id}`));
+  if (!list.data) return list.error ? <div className="notice bad">{list.error}</div> : <Loading card />;
   const active = (list.data ?? []).filter((v) => ['SCHEDULED', 'DISPATCHED', 'CHECKED_IN'].includes(v.status));
   const done = (list.data ?? []).filter((v) => !['SCHEDULED', 'DISPATCHED', 'CHECKED_IN'].includes(v.status)).slice(0, 10);
   return (
     <div className="stack">
-      {!active.length && <Empty>ما عندك زيارات قادمة.</Empty>}
+      {!active.length && <Empty icon="calendar" title="ما عندك زيارات قادمة">أول ما المنسق يعيّنلك زيارة بتظهر هون.</Empty>}
       <ul className="visits">{active.map((v) => <VisitCard key={v.id} v={v} reload={list.reload} />)}</ul>
       {done.length > 0 && (
         <details className="card">
           <summary>زيارات سابقة ({done.length})</summary>
-          <ul className="list">{done.map((v) => <li key={v.id} className="list-row"><span>{v.full_name} · {KIND_AR[v.kind]} · {fmtTime(v.scheduled_at)}</span><Pill status={v.status} /></li>)}</ul>
+          <ul className="list">{done.map((v) => <li key={v.id} className="list-row"><span><strong>{v.full_name}</strong><span className="cell-sub">{KIND_AR[v.kind]} · {fmtTime(v.scheduled_at)}</span></span><Pill status={v.status} /></li>)}</ul>
         </details>
       )}
     </div>
@@ -224,7 +230,8 @@ function ShiftPanel({ s, reload }: { s: any; reload: () => void }) {
     return (
       <div className="stack">
         {gps.manualFields}
-        <button className="primary block" disabled={busy} onClick={() => run(async () => { await api.post(`/shifts/${s.id}/check-in`, await gps.get()); reload(); }, 'تم تسجيل الحضور')}>تسجيل حضور الشفت</button>
+        {s.status === 'LATE' && <div className="visit-status warn"><Icon name="alert" />الشفت بلّش وما سجّلت حضور. المنسق وصله تنبيه.</div>}
+        <button className="primary block" disabled={busy} onClick={() => run(async () => { await api.post(`/shifts/${s.id}/check-in`, await gps.get()); reload(); }, 'تم تسجيل الحضور')}><Icon name="pin" />تسجيل حضور الشفت</button>
       </div>
     );
   }
@@ -243,8 +250,8 @@ function ShiftPanel({ s, reload }: { s: any; reload: () => void }) {
           setNews(r.news2);
         });
       }}>
-        <h3>العلامات الحيوية</h3>
-        <div className="grid-3">
+        <h3><Icon name="pulse" />العلامات الحيوية</h3>
+        <div className="grid-3 vitals">
           <Field label="التنفس /د"><input {...num('respRate')} /></Field>
           <Field label="SpO₂ %"><input {...num('spo2')} /></Field>
           <Field label="الضغط الانقباضي"><input {...num('systolicBp')} /></Field>
@@ -270,13 +277,13 @@ function ShiftPanel({ s, reload }: { s: any; reload: () => void }) {
         e.preventDefault();
         run(async () => { await api.post(`/shifts/${s.id}/notes`, { type: noteType, text: note }); setNote(''); }, 'تم حفظ الملاحظة');
       }}>
-        <h3>ملاحظات ومستجدات</h3>
-        <div className="seg" role="radiogroup">
+        <h3><Icon name="list" />ملاحظات ومستجدات</h3>
+        <div className="seg" role="radiogroup" aria-label="نوع الملاحظة">
           {([['PROGRESS', 'متابعة'], ['MEDICATION', 'أدوية'], ['INCIDENT', 'حادثة']] as const).map(([k, l]) => (
             <button type="button" key={k} className={noteType === k ? 'on' : ''} onClick={() => setNoteType(k)}>{l}</button>
           ))}
         </div>
-        <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} aria-label="الملاحظة" required />
+        <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} aria-label="الملاحظة" placeholder="شو صار خلال الشفت؟" required />
         <button className="secondary block" disabled={busy}>حفظ الملاحظة</button>
       </form>
 
@@ -288,9 +295,9 @@ function ShiftPanel({ s, reload }: { s: any; reload: () => void }) {
           return r;
         }, 'انتهى الشفت وتسجّلت الساعات');
       }}>
-        <h3>تسليم وإنهاء الشفت</h3>
+        <h3><Icon name="logout" />تسليم وإنهاء الشفت</h3>
         <Field label="ملخص التسليم للممرض اللي بعدك" hint="الحالة، الأدوية، أي شي لازم ينتبه عليه"><textarea rows={3} value={handover} onChange={(e) => setHandover(e.target.value)} required minLength={5} /></Field>
-        <button className="primary block" disabled={busy}>Check-out</button>
+        <button className="primary block" disabled={busy}>إنهاء الشفت · Check-out</button>
       </form>
     </div>
   );
@@ -298,22 +305,26 @@ function ShiftPanel({ s, reload }: { s: any; reload: () => void }) {
 
 function Shifts({ me }: { me: Staff }) {
   const list = useLoad(() => api.get<any[]>(`/shifts?nurseId=${me.id}`));
+  const [open, setOpen] = useState<number | null>(null);
+  if (!list.data) return list.error ? <div className="notice bad">{list.error}</div> : <Loading card />;
   const now = Date.now();
   const upcoming = (list.data ?? []).filter((s) => ['PLANNED', 'LATE', 'CHECKED_IN'].includes(s.status) && new Date(s.planned_end).getTime() > now - 6 * 3600_000);
-  const [open, setOpen] = useState<number | null>(null);
   const current = upcoming.find((s) => s.status === 'CHECKED_IN');
   const shown = open ?? current?.id ?? upcoming[0]?.id;
   return (
     <div className="stack">
-      {!upcoming.length && <Empty>ما عندك شفتات قادمة.</Empty>}
+      {!upcoming.length && <Empty icon="calendar" title="ما عندك شفتات قادمة">لما المنسق ينشر جدول جديد بتلاقي شفتاتك هون.</Empty>}
       <ul className="visits">
         {upcoming.slice(0, 14).map((s) => (
           <li key={s.id} className={`visit ${shown === s.id ? 'open' : ''}`}>
             <div className="visit-head" onClick={() => setOpen(s.id)}>
               <div>
-                <strong>{s.full_name}</strong> <span className="mono muted small">{s.episode_no}</span>
-                <div className="small muted">{fmtTime(s.planned_start)} ← {fmtTime(s.planned_end)}</div>
-                <div className="small muted">{s.address}</div>
+                <span className="small muted mono">{s.episode_no}</span>
+                <strong>{s.full_name}</strong>
+                <div className="visit-meta">
+                  <span><Icon name="clock" size={15} />{fmtTime(s.planned_start)} ← {fmtTime(s.planned_end)}</span>
+                  {s.address && <span><Icon name="pin" size={15} />{s.address}</span>}
+                </div>
               </div>
               <Pill status={s.status} />
             </div>
@@ -333,7 +344,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
   const [order, setOrder] = useState({ serviceCode: '', priority: 'ROUTINE', notes: '' });
   const [decision, setDecision] = useState<Record<number, string>>({});
   const d = ep.data;
-  if (!d) return <p className="muted">تحميل…</p>;
+  if (!d) return <Loading />;
   const pending = d.results.filter((r: any) => !r.acknowledged_by);
   const openEsc = d.escalations.filter((e: any) => e.status !== 'RESOLVED' && e.trigger !== 'CRITICAL_RESULT');
   const orderable = services.filter((s) => s.department !== 'CLINICAL');
@@ -349,7 +360,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
 
       {openEsc.map((e: any) => (
         <div key={e.id} className="notice bad">
-          <strong>{e.trigger === 'NEWS2' ? `NEWS2 · ${e.level}` : e.trigger}</strong> {escalationAr(e.trigger, e.level)}
+          <div className="notice-head"><Icon name="alert" /><span><strong>{e.trigger === 'NEWS2' ? `NEWS2 · ${e.level}` : e.trigger}</strong> {escalationAr(e.trigger, e.level)}</span></div>
           <div className="row">
             <input aria-label="القرار" placeholder="القرار: تعديل علاج، زيارة، تحويل…" value={decision[e.id] ?? ''} onChange={(x) => setDecision({ ...decision, [e.id]: x.target.value })} />
             <button className="primary" disabled={busy || !decision[e.id]} onClick={() => run(async () => { await api.post(`/escalations/${e.id}/ack`, { decision: decision[e.id], resolve: true }); ep.reload(); }, 'تم توثيق القرار')}>توثيق وإغلاق</button>
@@ -378,7 +389,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
           ep.reload();
         }, 'اعتُمدت خطة الرعاية وانبعتت للمنسق');
       }}>
-        <h3>خطة الرعاية {d.carePlan && <span className="muted small">(الحالية: v{d.carePlan.version} · {d.carePlan.shift_hours}h × {d.carePlan.hours_per_day}h/يوم × {d.carePlan.duration_days} يوم)</span>}</h3>
+        <h3>خطة الرعاية {d.carePlan && <span className="muted small">الحالية: نسخة {d.carePlan.version} · شفت {d.carePlan.shift_hours} س · {d.carePlan.hours_per_day} س/يوم · {d.carePlan.duration_days} يوم</span>}</h3>
         <div className="grid-3">
           <Field label="طول الشفت">
             <select value={plan.shiftHours} onChange={(e) => setPlan({ ...plan, shiftHours: e.target.value })}><option value="8">8 ساعات</option><option value="12">12 ساعة</option><option value="24">24 ساعة</option></select>
@@ -387,7 +398,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
           <Field label="المدة (أيام)"><input type="number" min={1} value={plan.durationDays} onChange={(e) => setPlan({ ...plan, durationDays: e.target.value })} /></Field>
         </div>
         <Field label="الأهداف"><textarea rows={2} value={plan.goals} onChange={(e) => setPlan({ ...plan, goals: e.target.value })} /></Field>
-        <button className="secondary" disabled={busy}>اعتماد الخطة</button>
+        <button className="primary" disabled={busy}>اعتماد الخطة</button>
       </form>
 
       <form className="action" onSubmit={(e) => {
@@ -407,7 +418,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
           </Field>
           <Field label="ملاحظة"><input value={order.notes} onChange={(e) => setOrder({ ...order, notes: e.target.value })} /></Field>
         </div>
-        <button className="secondary" disabled={busy}>إرسال</button>
+        <button className="secondary" disabled={busy}><Icon name="send" />إرسال الأوردر</button>
         {d.orders.length > 0 && (
           <ul className="list">{d.orders.map((o: any) => <li key={o.id} className="list-row"><span>{services.find((s) => s.code === o.service_code)?.name_ar} · {o.priority}</span><Pill status={o.status === 'ACKNOWLEDGED' ? 'RESOLVED' : o.status === 'VALIDATED' ? 'ACKED' : 'PLANNED'} label={{ PLACED: 'مُرسل', ACCEPTED: 'مستلم', IN_PROGRESS: 'قيد التنفيذ', VALIDATED: 'نتيجة جاهزة', ACKNOWLEDGED: 'تمت المراجعة' }[o.status as string]} /></li>)}</ul>
         )}
@@ -437,12 +448,13 @@ function Doctor({ me }: { me: Staff }) {
   const [open, setOpen] = useState<number | null>(null);
   return (
     <div className="stack">
-      {!mine.length && <Empty>ما عندك حالات رعاية منزلية نشطة.</Empty>}
+      {!list.data && <Loading card />}
+      {list.data && !mine.length && <Empty icon="heart" title="ما عندك حالات نشطة">حالات الرعاية المنزلية اللي انت طبيبها بتظهر هون.</Empty>}
       <ul className="visits">
         {mine.map((e) => (
-          <li key={e.id} className="visit">
-            <div className="visit-head" onClick={() => setOpen(open === e.id ? null : e.id)}>
-              <div><strong>{e.full_name}</strong> <span className="mono muted small">{e.episode_no}</span><div className="small muted">{e.diagnosis}</div></div>
+          <li key={e.id} className={`visit${open === e.id ? ' open' : ''}`}>
+            <div className="visit-head" onClick={() => setOpen(open === e.id ? null : e.id)} role="button" aria-expanded={open === e.id}>
+              <div><span className="small muted mono">{e.episode_no}</span><strong>{e.full_name}</strong><div className="small muted">{e.diagnosis}</div></div>
               <Pill status={e.status} />
             </div>
             {open === e.id && services.data && <DoctorCase id={e.id} services={services.data} />}
@@ -463,16 +475,17 @@ function Worklist({ me }: { me: Staff }) {
   const [rep, setRep] = useState<Record<number, { text: string; critical: boolean }>>({});
   return (
     <div className="stack">
-      {!list.data?.length && <Empty>ما في أوردرات مفتوحة لقسمك.</Empty>}
+      {!list.data && <Loading card />}
+      {list.data && !list.data.length && <Empty icon="lab" title="ما في أوردرات مفتوحة">أوردرات الأطباء لقسمك بتظهر هون أول بأول.</Empty>}
       <ul className="visits">
         {list.data?.map((o) => (
           <li key={o.id} className="visit">
             <div className="visit-head">
-              <div><strong>{o.name_ar}</strong> <span className="muted small">#{o.id}</span><div className="small muted">{fmtTime(o.created_at)} {o.notes && `· ${o.notes}`}</div></div>
+              <div><span className="small muted mono">#{o.id}</span><strong>{o.name_ar}</strong><div className="small muted">{fmtTime(o.created_at)} {o.notes && `· ${o.notes}`}</div></div>
               <Pill status={o.priority === 'ROUTINE' ? 'PLANNED' : 'HIGH'} label={{ ROUTINE: 'عادي', URGENT: 'عاجل', STAT: 'فوري' }[o.priority as string]} />
             </div>
             {o.status === 'PLACED' ? (
-              <button className="secondary block" disabled={busy} onClick={() => run(async () => { await api.post(`/orders/${o.id}/accept`); list.reload(); }, 'استلمت الأوردر')}>استلام</button>
+              <button className="secondary block" disabled={busy} onClick={() => run(async () => { await api.post(`/orders/${o.id}/accept`); list.reload(); }, 'استلمت الأوردر')}><Icon name="check" />استلام الأوردر</button>
             ) : (
               <div className="stack">
                 <textarea rows={2} aria-label="النتيجة" placeholder={dept === 'EQUIPMENT' ? 'تم التوصيل والتركيب…' : 'النتيجة / التقرير'} value={rep[o.id]?.text ?? ''} onChange={(e) => setRep({ ...rep, [o.id]: { text: e.target.value, critical: rep[o.id]?.critical ?? false } })} />
@@ -495,10 +508,18 @@ export function FieldApp({ me }: { me: Staff }) {
   if (me.role === 'DOCTOR') tabs.push(['cases', 'حالاتي']);
   if (ROLE_DEPT[me.role]) tabs.push(['work', 'أوردرات القسم']);
   const [tab, setTab] = useState(tabs[0][0]);
+  const TAB_IC: Record<string, string> = { visits: 'calendar', shifts: 'clock', cases: 'steth', work: 'lab' };
+  const today = new Date().toLocaleDateString('ar-JO-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' });
   return (
     <div className="phone">
-      <div className="subtabs" role="tablist">
-        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
+      <div className="app-hello">
+        <div>
+          <h1>أهلاً {staffName(me.name)}</h1>
+          <p>{today} · {ROLE_AR[me.role]}</p>
+        </div>
+      </div>
+      <div className={`subtabs${tabs.length > 1 ? ' app-nav' : ''}`} role="tablist">
+        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}><Icon name={TAB_IC[k]} />{l}</button>)}
       </div>
       {tab === 'visits' && <Visits me={me} />}
       {tab === 'shifts' && <Shifts me={me} />}

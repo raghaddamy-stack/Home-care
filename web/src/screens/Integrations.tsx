@@ -1,7 +1,8 @@
 // Owner: API keys for the ERP, webhook health, and where to find the API description.
 import { useState } from 'react';
 import { api, fmtTime } from '../api';
-import { Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
+import { Icon } from '../icons';
 
 const SCOPE_AR: Record<string, string> = {
   'invoices:read': 'قراءة الفواتير', 'invoices:ack': 'تأكيد الترحيل', 'payments:read': 'قراءة الدفعات', 'payments:write': 'تسجيل دفعات',
@@ -16,7 +17,7 @@ export function Integrations() {
   const [created, setCreated] = useState<{ name: string; key: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const d = data.data;
-  if (!d) return <p className="muted">تحميل…</p>;
+  if (!d) return data.error ? <div className="notice bad">{data.error}</div> : <Loading card />;
   const base = `${location.origin}/api/erp/v1`;
 
   const copy = async (text: string) => {
@@ -27,14 +28,14 @@ export function Integrations() {
     <div className="split">
       <div className="stack">
         <div className="card">
-          <h2>مفاتيح الربط (API Keys)</h2>
+          <div className="card-head"><div><h2>مفاتيح الربط (API Keys)</h2></div></div>
           <p className="small muted">كل نظام خارجي (SAP، Odoo، Oracle…) إله مفتاح خاص بصلاحيات محددة. المفتاح بيظهر مرة وحدة بس، فانسخه وسلّمه لفريق الـ ERP.</p>
           {created && (
             <div className="notice ok">
               <strong>مفتاح {created.name}</strong>
               <code className="key" dir="ltr">{created.key}</code>
               <div className="row-tight">
-                <button className="secondary" onClick={() => copy(created.key)}>{copied ? 'تم النسخ' : 'نسخ المفتاح'}</button>
+                <button className="secondary" onClick={() => copy(created.key)}><Icon name={copied ? 'check' : 'list'} />{copied ? 'تم النسخ' : 'نسخ المفتاح'}</button>
                 <button className="ghost" onClick={() => { setCreated(null); setCopied(false); }}>تم، خبّيه</button>
               </div>
             </div>
@@ -47,24 +48,25 @@ export function Integrations() {
             }, 'انعمل المفتاح');
           }}>
             <Field label="اسم النظام"><input id="cl-name" value={name} onChange={(e) => setName(e.target.value)} required minLength={2} /></Field>
+            <span className="field-label">الصلاحيات</span>
             <div className="chips" role="group" aria-label="الصلاحيات">
               {d.scopes.map((sc: string) => {
                 const on = scopes.includes(sc);
-                return <button type="button" key={sc} className={on ? 'chip on' : 'chip'} onClick={() => setScopes(on ? scopes.filter((x) => x !== sc) : [...scopes, sc])}>{SCOPE_AR[sc] ?? sc}</button>;
+                return <button type="button" key={sc} className={on ? 'chip on' : 'chip'} aria-pressed={on} onClick={() => setScopes(on ? scopes.filter((x) => x !== sc) : [...scopes, sc])}>{SCOPE_AR[sc] ?? sc}</button>;
               })}
             </div>
-            <button className="primary" disabled={busy || !scopes.length}>إنشاء مفتاح</button>
+            <button className="primary" style={{ justifySelf: 'start' }} disabled={busy || !scopes.length}><Icon name="plus" />إنشاء مفتاح</button>
           </form>
         </div>
 
         <div className="card">
           <h3>المفاتيح الحالية</h3>
-          {!d.clients.length && <Empty>ما في مفاتيح بعد.</Empty>}
+          {!d.clients.length && <Empty icon="plug" title="ما في مفاتيح بعد">أنشئ مفتاح لكل نظام خارجي من النموذج فوق.</Empty>}
           <ul className="list">
             {d.clients.map((c: any) => (
               <li key={c.id} className="list-row">
                 <div>
-                  <strong>{c.name}</strong> <span className="mono small muted" dir="ltr">{c.key_prefix}…</span>
+                  <div className="li-title"><strong>{c.name}</strong> <span className="mono small muted" dir="ltr">{c.key_prefix}…</span></div>
                   <div className="small muted">{c.scopes.map((x: string) => SCOPE_AR[x] ?? x).join('، ')}</div>
                   <div className="small muted">آخر استخدام: {c.last_used_at ? fmtTime(c.last_used_at) : 'لسا'}</div>
                 </div>
@@ -91,7 +93,7 @@ export function Integrations() {
         </div>
         <div className="card">
           <h3>الـ Webhook</h3>
-          {d.webhook.url ? <code className="key" dir="ltr">{d.webhook.url}</code> : <p className="small muted">متوقف. حط الرابط من إعدادات المالك ← ربط ERP.</p>}
+          {d.webhook.url ? <code className="key" dir="ltr">{d.webhook.url}</code> : <Empty compact icon="plug">متوقف. حط الرابط من إعدادات المالك ← ربط ERP.</Empty>}
           <div className="row-tight">
             {d.webhook.counts.map((c: any) => <Pill key={c.status} status={c.status === 'SENT' ? 'RESOLVED' : c.status === 'FAILED' ? 'HIGH' : 'PLANNED'} label={`${{ SENT: 'انبعت', FAILED: 'فشل', PENDING: 'بالانتظار', SKIPPED: 'بدون Webhook' }[c.status as string] ?? c.status}: ${c.n}`} />)}
           </div>

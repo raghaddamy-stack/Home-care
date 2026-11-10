@@ -1,7 +1,8 @@
 // Call center: register a request on the phone, and follow up on requests with missing data.
 import { useMemo, useState } from 'react';
-import { api, ApiError, isoToLocal, jod, localToIso, type RequestRow, type Service, type Staff } from '../api';
-import { Empty, Field, Pill, useAction, useLoad } from '../ui';
+import { api, ApiError, isoToLocal, jod, localToIso, noteAr, type RequestRow, type Service, type Staff } from '../api';
+import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
+import { Icon } from '../icons';
 
 interface PatientForm {
   nationalId: string; fullName: string; dob: string; gender: '' | 'M' | 'F'; phone: string;
@@ -104,11 +105,19 @@ function NewRequest({ onCreated }: { onCreated: () => void }) {
 
   return (
     <form className="card" onSubmit={submit}>
-      <h2>طلب جديد بالتلفون</h2>
+      <div className="card-head">
+        <div>
+          <h2>طلب جديد بالتلفون</h2>
+          <p>ابحث عن المريض بالرقم الوطني، اختار الخدمة، وسجّل الطلب. التسعير النهائي عند المنسق.</p>
+        </div>
+      </div>
       {result && (
         <div className={`notice ${result.missing.length ? 'warn' : 'ok'}`}>
-          <strong>{result.request_no}</strong>{' '}
-          {result.missing.length ? `ناقص: ${result.missing.join('، ')}. الطلب بقائمة المتابعة.` : 'تحوّل للمنسق للتسعير.'}
+          <div className="notice-head">
+            <Icon name={result.missing.length ? 'alert' : 'check'} />
+            <span><strong className="mono">{result.request_no}</strong>{' · '}
+              {result.missing.length ? `${noteAr('Missing: ' + result.missing.join(', '))}. الطلب بقائمة المتابعة.` : 'انسجل وتحوّل للمنسق للتسعير.'}</span>
+          </div>
         </div>
       )}
 
@@ -116,15 +125,16 @@ function NewRequest({ onCreated }: { onCreated: () => void }) {
         <h3><span className="num">1</span> المريض</h3>
         <div className="row">
           <Field label="الرقم الوطني"><input id="nid" value={p.nationalId} onChange={(e) => { setP({ ...p, nationalId: e.target.value }); setFound(null); }} inputMode="numeric" required /></Field>
-          <button type="button" className="secondary" onClick={lookup} disabled={busy || p.nationalId.trim().length < 5}>بحث</button>
+          <button type="button" className="secondary" onClick={lookup} disabled={busy || p.nationalId.trim().length < 5}><Icon name="search" />بحث</button>
           {found === 'existing' && <Pill status="ACTIVE" label="ملف موجود" />}
           {found === 'new' && <Pill status="UNDER_REVIEW" label="مريض جديد" />}
         </div>
-        {found && <PatientFields p={p} set={setP} />}
+        {found ? <PatientFields p={p} set={setP} /> : <p className="small muted">اكتب الرقم الوطني واضغط بحث: إذا المريض إله ملف بنعبّي بياناته، وإذا جديد بنفتحله ملف.</p>}
       </section>
 
       <section className="step">
         <h3><span className="num">2</span> الخدمة</h3>
+        {!services.data && <Loading />}
         {Object.entries(byLine).map(([line, list]) => (
           <div key={line} className="svc-group">
             <span className="svc-line">{LINE_AR[line] ?? line}</span>
@@ -169,8 +179,8 @@ function NewRequest({ onCreated }: { onCreated: () => void }) {
       </section>
 
       <footer className="form-foot">
-        <span className="muted">تقدير نقدي: <strong className="mono">{jod(estimate)}</strong> (السعر النهائي من المنسق)</span>
-        <button className="primary" disabled={busy || !found || chosen.length === 0 || !p.fullName}>تسجيل الطلب</button>
+        <span className="estimate"><span className="small muted">تقدير نقدي ({chosen.length} خدمة) · السعر النهائي من المنسق</span><strong>{jod(estimate)}</strong></span>
+        <button className="primary" disabled={busy || !found || chosen.length === 0 || !p.fullName}><Icon name="check" />تسجيل الطلب</button>
       </footer>
     </form>
   );
@@ -192,17 +202,24 @@ function PendingInfo({ tick }: { tick: number }) {
 
   return (
     <div className="card">
-      <h2>متابعة بيانات ناقصة</h2>
-      {!list.data?.length && <Empty>ما في طلبات ناقصة حالياً.</Empty>}
+      <div className="card-head">
+        <div>
+          <h2>متابعة بيانات ناقصة {!!list.data?.length && <span className="count">{list.data.length}</span>}</h2>
+          <p>طلبات وصلت ناقصة. اتصل بالمريض وكمّل البيانات لتتحوّل للمنسق.</p>
+        </div>
+      </div>
+      {!list.data && !list.error && <Loading />}
+      {list.data && !list.data.length && <Empty icon="check" title="كل الطلبات مكتملة">ما في طلبات ناقصة حالياً.</Empty>}
       <ul className="list">
         {list.data?.map((r) => (
           <li key={r.id}>
             <div className="list-row">
               <div>
-                <strong>{r.full_name}</strong> <span className="muted mono">{r.request_no}</span>
-                <div className="muted small">{r.last_note} · {r.phone ?? 'بدون هاتف'}</div>
+                <div className="li-title"><strong>{r.full_name}</strong> <span className="muted mono small">{r.request_no}</span></div>
+                <div className="small" style={{ color: 'var(--warn)' }}>{noteAr(r.last_note)}</div>
+                <div className="muted small">{r.phone ? <span className="mono">{r.phone}</span> : 'بدون هاتف'}</div>
               </div>
-              <button className="secondary" onClick={() => start(r)}>استكمال</button>
+              <button className="secondary" onClick={() => (open === r.id ? setOpen(null) : start(r))} aria-expanded={open === r.id}>{open === r.id ? 'إغلاق' : 'استكمال'}</button>
             </div>
             {open === r.id && (
               <form className="inline-form" onSubmit={(e) => {
@@ -217,7 +234,7 @@ function PendingInfo({ tick }: { tick: number }) {
               }}>
                 <PatientFields p={p} set={setP} />
                 <Field label="رقم الوصفة (إذا مطلوبة)"><input value={rx} onChange={(e) => setRx(e.target.value)} /></Field>
-                <button className="primary" disabled={busy}>حفظ</button>
+                <button className="primary" disabled={busy}>حفظ وتحويل للمنسق</button>
               </form>
             )}
           </li>

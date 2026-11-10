@@ -41,7 +41,7 @@ export const jod = (fils: number | null | undefined) =>
   fils === null || fils === undefined ? '—' : `${(fils / 1000).toFixed(3)} د.أ`;
 
 export const fmtTime = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleString('ar-JO', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+  iso ? new Date(iso).toLocaleString('ar-JO-u-nu-latn', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 
 /** Value for <input type="datetime-local"> → ISO string. */
 export const localToIso = (v: string) => new Date(v).toISOString();
@@ -56,6 +56,19 @@ export const STATUS_AR: Record<string, string> = {
   NO_SHOW: 'No-show', COMPLETED: 'مكتمل', CONVERTED_TO_EPISODE: 'رعاية منزلية', REFERRED_OUT: 'محوّل', CANCELLED: 'ملغي',
   PLANNED: 'مخطط', LATE: 'متأخر', CHECKED_IN: 'حاضر', MISSED: 'فائت', ACTIVE: 'نشط', ON_HOLD: 'معلّق', DISCHARGED: 'منتهي',
   OPEN: 'مفتوح', ACKED: 'تم الرد', RESOLVED: 'مغلق', DRAFT: 'مسودة', ISSUED: 'صادرة', PAID: 'مدفوعة', PARTIALLY_PAID: 'مدفوعة جزئياً',
+};
+
+/** Demo staff names carry an English role hint, e.g. "Lina (call center)"; the role is shown in Arabic next to it. */
+export const staffName = (name: string | null | undefined) => (name ?? '').replace(/\s*\(.*\)\s*$/, '');
+
+export const MISSING_AR: Record<string, string> = {
+  dob: 'تاريخ الميلاد', gender: 'الجنس', phone: 'الهاتف', address: 'العنوان', 'gps location': 'الموقع (GPS)', 'emergency contact': 'رقم للطوارئ', prescription: 'الوصفة الطبية',
+};
+/** Backend notes like "Missing: dob, gender" → Arabic. */
+export const noteAr = (note: string | null | undefined) => {
+  if (!note) return '';
+  const m = note.match(/^Missing:\s*(.*)$/i);
+  return m ? `ناقص: ${m[1].split(/,\s*/).map((x) => MISSING_AR[x.trim()] ?? x).join('، ')}` : note;
 };
 
 export const ROLE_AR: Record<string, string> = {
