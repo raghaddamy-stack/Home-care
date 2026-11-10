@@ -3,13 +3,90 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { needsEscalation, scoreNews2 } from '../domain/news2.js';
-import { billableMinutes, buildRoster, CHECK_IN_RADIUS_M, distanceMetres, isLate, SHIFT_PATTERNS } from '../domain/shifts.js';
+import { billableMinutes, buildRoster, CHECK_IN_RADIUS_M, distanceMetres, isLate, SHIFT_PATTERNS, workingTimeViolations, type TimeSlot } from '../domain/shifts.js';
+import { CRITICAL_RESULT_ACK_MIN, dueAt, isOverdue, NEWS2_RECHECK_MIN, RESULT_AUTO_RELEASE_H, timerFor } from '../domain/escalation.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { assertStaffAvailable, setStatus } from './requests.js';
+import { ConsentInput, ensureConsent } from './consent.js';
 
-function openEscalation(db: Db, episodeId: number, trigger: string, level: string, action: string, refId?: number) {
-  const id = db.insert('escalations', { episode_id: episodeId, trigger, level, action, ref_id: refId });
+/**
+ * BR-33 check for one nurse: existing open/completed shifts in the surrounding fortnight plus the new ones.
+ * A supervisor may override with a reason (hard warning, not a hard stop); the override is audited.
+ */
+function assertWorkingTime(db: Db, nurseId: number, proposed: TimeSlot[], override: { by?: Row; reason?: string }, excludeShiftId?: number) {
+  if (proposed.length === 0) return;
+  const from = new Date(Math.min(...proposed.map((p) => p.start.getTime())) - 8 * 86_400_000).toISOString();
+  const to = new Date(Math.max(...proposed.map((p) => p.end.getTime())) + 8 * 86_400_000).toISOString();
+  const existing = db.all(
+    `SELECT planned_start, planned_end FROM shifts WHERE nurse_id = ? AND status IN ('PLANNED','LATE','CHECKED_IN','COMPLETED')
+     AND planned_end > ? AND planned_start < ? AND id != ?`,
+    nurseId, from, to, excludeShiftId ?? 0,
+  ).map((s) => ({ start: new Date(s.planned_start), end: new Date(s.planned_end) }));
+  const problems = workingTimeViolations([...existing, ...proposed]);
+  if (problems.length === 0) return;
+  if (override.reason && override.by && ['SUPERVISOR', 'ADMIN'].includes(override.by.role)) {
+    audit(db, override.by.id, 'WORKING_TIME_OVERRIDE', 'staff', nurseId, { problems, reason: override.reason });
+    return;
+  }
+  throw new HttpError(409, `Nurse ${nurseId} working-time limits (BR-33): ${problems.join('; ')}. A nursing supervisor can override with a reason.`);
+}
+
+/** Open an escalation with its response deadline (§5.5). HIGH goes to the medical director at once. */
+function openEscalation(db: Db, episodeId: number, trigger: string, level: string, action: string, at: Date, refId?: number) {
+  const due = dueAt(trigger, level, at);
+  const immediate = due !== null && due.getTime() <= at.getTime();
+  const id = db.insert('escalations', {
+    episode_id: episodeId, trigger, level, action, ref_id: refId, opened_at: at, due_at: due ?? undefined,
+    escalated_at: immediate ? at : undefined, escalated_to: immediate ? timerFor(trigger, level)!.escalateTo : undefined,
+  });
+  if (immediate) notify(db, `role:${timerFor(trigger, level)!.escalateTo}`, 'CALL', `${trigger} ${level} escalation #${id}: review now`);
   return id;
+}
+
+/**
+ * Timer sweep (§5.5), run by the scheduler every minute:
+ * - open escalations past their deadline go up to the medical director (or nursing supervisor for late shifts);
+ * - critical results not acknowledged within 30 min of validation are escalated the same way (also outpatient ones);
+ * - NEWS2 5–6 with no new vitals within 15 min: the nurse is told to recheck;
+ * - non-critical results the doctor has not reviewed are released to the patient after 24 h.
+ */
+export function runEscalationTimers(db: Db, at: Date) {
+  const iso = at.toISOString();
+  const escalated: number[] = [];
+  const recheck: number[] = [];
+  const escalatedResults: number[] = [];
+  db.tx(() => {
+    for (const e of db.all<any>(`SELECT * FROM escalations WHERE status = 'OPEN' AND due_at IS NOT NULL AND escalated_at IS NULL AND due_at <= ?`, iso)) {
+      if (!isOverdue(e, at)) continue;
+      const to = timerFor(e.trigger, e.level)!.escalateTo;
+      db.update('escalations', e.id, { escalated_at: at, escalated_to: to });
+      notify(db, `role:${to}`, 'CALL', `Escalation #${e.id} (${e.trigger} ${e.level}) not answered in time: respond now`);
+      if (e.trigger === 'CRITICAL_RESULT' && e.ref_id) db.update('results', e.ref_id, { escalated_at: at });
+      escalated.push(e.id);
+    }
+    const cutoff = new Date(at.getTime() - CRITICAL_RESULT_ACK_MIN * 60_000).toISOString();
+    for (const r of db.all(`SELECT * FROM results WHERE critical = 1 AND acknowledged_by IS NULL AND escalated_at IS NULL AND created_at <= ?`, cutoff)) {
+      db.update('results', r.id, { escalated_at: at });
+      notify(db, 'role:MEDICAL_DIRECTOR', 'CALL', `Critical result #${r.id} not acknowledged within ${CRITICAL_RESULT_ACK_MIN} min: call the patient now`);
+      escalatedResults.push(r.id);
+    }
+    const recheckCutoff = new Date(at.getTime() - NEWS2_RECHECK_MIN * 60_000).toISOString();
+    for (const e of db.all(
+      `SELECT x.*, v.shift_id, v.at AS reading_at FROM escalations x JOIN vitals v ON v.id = x.ref_id
+       WHERE x.trigger = 'NEWS2' AND x.level = 'MEDIUM' AND x.status != 'RESOLVED' AND v.at <= ?
+       AND x.recheck_requested_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM vitals n WHERE n.episode_id = x.episode_id AND n.at > v.at)`,
+      recheckCutoff,
+    )) {
+      db.update('escalations', e.id, { recheck_requested_at: at });
+      const nurse = e.shift_id ? db.get<{ nurse_id: number }>('SELECT nurse_id FROM shifts WHERE id = ?', e.shift_id)?.nurse_id : undefined;
+      notify(db, nurse ? `staff:${nurse}` : 'role:NURSE', 'PUSH', `Recheck vitals now (escalation #${e.id}): NEWS2 5-6 needs a repeat reading within ${NEWS2_RECHECK_MIN} min`);
+      recheck.push(e.id);
+    }
+    const releaseCutoff = new Date(at.getTime() - RESULT_AUTO_RELEASE_H * 3600_000).toISOString();
+    db.run(`UPDATE results SET released_at = ? WHERE critical = 0 AND released_at IS NULL AND acknowledged_by IS NULL AND created_at <= ?`, iso, releaseCutoff);
+  });
+  return { escalated, escalatedResults, recheck };
 }
 
 function nurseShift(db: Db, req: any): { shift: Row; staff: Row } {
@@ -154,10 +231,10 @@ export function clinicalRoutes(db: Db): Router {
     if (!['PLACED', 'ACCEPTED', 'IN_PROGRESS'].includes(o.status)) throw new HttpError(409, `Order is ${o.status}`);
     const ep = getOr404(db, 'episodes', o.episode_id, 'Episode');
     const out = db.tx(() => {
-      const id = db.insert('results', { order_id: o.id, patient_id: ep.patient_id, report: body.report, critical: body.critical, validated_by: staff.id });
+      const id = db.insert('results', { order_id: o.id, patient_id: ep.patient_id, report: body.report, critical: body.critical, validated_by: staff.id, created_at: now(req) });
       db.update('orders', o.id, { status: 'VALIDATED' });
       if (body.critical) {
-        openEscalation(db, ep.id, 'CRITICAL_RESULT', 'CRITICAL', 'Doctor must acknowledge within 30 min', id);
+        openEscalation(db, ep.id, 'CRITICAL_RESULT', 'CRITICAL', 'Doctor must acknowledge within 30 min', now(req), id);
         notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'CALL', `CRITICAL result for ${ep.episode_no}`);
       } else notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'PUSH', `Result ready for review (${ep.episode_no})`);
       return { id, critical: body.critical };
@@ -181,7 +258,10 @@ export function clinicalRoutes(db: Db): Router {
   // ---- Roster and shifts -----------------------------------------------------
   r.post('/episodes/:id/roster', wrap((req, res) => {
     const staff = requireRole(db, req, 'COORDINATOR', 'SUPERVISOR');
-    const body = z.object({ start: z.string().datetime(), nurseIds: z.array(z.number().int()).min(1), days: z.number().int().min(1).optional() }).parse(req.body);
+    const body = z.object({
+      start: z.string().datetime(), nurseIds: z.array(z.number().int()).min(1), days: z.number().int().min(1).optional(),
+      overrideReason: z.string().min(5).optional(),
+    }).parse(req.body);
     const ep = getOr404(db, 'episodes', req.params.id, 'Episode');
     if (ep.status !== 'ACTIVE') throw new HttpError(409, `Episode is ${ep.status}`);
     const plan = db.get('SELECT * FROM care_plans WHERE episode_id = ? ORDER BY version DESC LIMIT 1', ep.id);
@@ -190,6 +270,9 @@ export function clinicalRoutes(db: Db): Router {
     for (const id of body.nurseIds) assertStaffAvailable(db, id, ['NURSE'], start);
 
     const planned = buildRoster({ start, days: body.days ?? plan.duration_days, shiftHours: plan.shift_hours, hoursPerDay: plan.hours_per_day, nurseIds: body.nurseIds });
+    for (const nurseId of new Set(body.nurseIds)) {
+      assertWorkingTime(db, nurseId, planned.filter((s) => s.nurseId === nurseId), { by: staff, reason: body.overrideReason });
+    }
     const ids = db.tx(() => planned.map((s) => {
       const overlap = db.get(
         `SELECT id FROM shifts WHERE nurse_id = ? AND status IN ('PLANNED','LATE','CHECKED_IN') AND planned_start < ? AND planned_end > ?`,
@@ -220,7 +303,7 @@ export function clinicalRoutes(db: Db): Router {
     db.tx(() => {
       for (const s of late) {
         db.update('shifts', s.id, { status: 'LATE' });
-        openEscalation(db, s.episode_id, 'LATE_SHIFT', 'OPS', 'Call nurse; send backup if no ETA in 15 min', s.id);
+        openEscalation(db, s.episode_id, 'LATE_SHIFT', 'OPS', 'Call nurse; send backup if no ETA in 15 min', t, s.id);
         notify(db, 'role:COORDINATOR', 'PUSH', `Shift ${s.id}: nurse not checked in, send a backup`);
       }
     });
@@ -230,10 +313,12 @@ export function clinicalRoutes(db: Db): Router {
   // Send a backup nurse for a late / missed shift.
   r.post('/shifts/:id/reassign', wrap((req) => {
     const staff = requireRole(db, req, 'COORDINATOR', 'SUPERVISOR');
-    const { nurseId } = z.object({ nurseId: z.number().int() }).parse(req.body);
+    const { nurseId, overrideReason } = z.object({ nurseId: z.number().int(), overrideReason: z.string().min(5).optional() }).parse(req.body);
     const shift = getOr404(db, 'shifts', req.params.id, 'Shift');
     if (!['PLANNED', 'LATE'].includes(shift.status)) throw new HttpError(409, `Shift is ${shift.status}`);
     assertStaffAvailable(db, nurseId, ['NURSE'], now(req));
+    // A backup nurse coming off a night shift must still get the minimum rest (BR-33).
+    assertWorkingTime(db, nurseId, [{ start: new Date(shift.planned_start), end: new Date(shift.planned_end) }], { by: staff, reason: overrideReason });
     return db.tx(() => {
       db.update('shifts', shift.id, { status: 'MISSED' });
       const id = db.insert('shifts', { episode_id: shift.episode_id, nurse_id: nurseId, planned_start: shift.planned_start, planned_end: shift.planned_end, replaced_shift_id: shift.id });
@@ -244,8 +329,8 @@ export function clinicalRoutes(db: Db): Router {
   }));
 
   r.post('/shifts/:id/check-in', wrap((req) => {
-    const body = z.object({ lat: z.number(), lng: z.number() }).parse(req.body);
-    const { shift } = nurseShift(db, req);
+    const body = z.object({ lat: z.number(), lng: z.number(), consent: ConsentInput.optional() }).parse(req.body);
+    const { shift, staff } = nurseShift(db, req);
     if (!['PLANNED', 'LATE'].includes(shift.status)) throw new HttpError(409, `Shift is ${shift.status}`);
     const ep = getOr404(db, 'episodes', shift.episode_id);
     const p = getOr404(db, 'patients', ep.patient_id);
@@ -253,7 +338,10 @@ export function clinicalRoutes(db: Db): Router {
       const d = distanceMetres(body, { lat: p.lat, lng: p.lng });
       if (d > CHECK_IN_RADIUS_M) throw new HttpError(400, `You are ${Math.round(d)} m from the patient address`);
     }
-    db.update('shifts', shift.id, { status: 'CHECKED_IN', check_in_at: now(req) });
+    db.tx(() => {
+      ensureConsent(db, p, 'NURSE', now(req), staff.id, body.consent); // BR-80
+      db.update('shifts', shift.id, { status: 'CHECKED_IN', check_in_at: now(req) });
+    });
     return { status: 'CHECKED_IN' };
   }));
 
@@ -262,7 +350,7 @@ export function clinicalRoutes(db: Db): Router {
     const { shift } = nurseShift(db, req);
     if (shift.status !== 'CHECKED_IN') throw new HttpError(409, 'Check in before writing notes');
     const id = db.insert('shift_notes', { shift_id: shift.id, type: body.type, text: body.text, at: now(req) });
-    if (body.type === 'INCIDENT') openEscalation(db, shift.episode_id, 'INCIDENT', 'REVIEW', 'Supervisor review', id);
+    if (body.type === 'INCIDENT') openEscalation(db, shift.episode_id, 'INCIDENT', 'REVIEW', 'Supervisor review', now(req), id);
     res.status(201).json({ id });
   }));
 
@@ -277,7 +365,7 @@ export function clinicalRoutes(db: Db): Router {
       const id = db.insert('vitals', { episode_id: ep.id, shift_id: shift.id, data: v, news2_total: score.total, band: score.band, at: now(req) });
       let escalationId: number | undefined;
       if (needsEscalation(score)) {
-        escalationId = openEscalation(db, ep.id, 'NEWS2', score.band, score.action, id);
+        escalationId = openEscalation(db, ep.id, 'NEWS2', score.band, score.action, now(req), id);
         if (score.band === 'HIGH') {
           db.update('episodes', ep.id, { status: 'ON_HOLD' });
           notify(db, `staff:${ep.doctor_id ?? 'oncall'}`, 'CALL', `NEWS2 ${score.total} for ${ep.episode_no}: ambulance called`);
@@ -290,6 +378,9 @@ export function clinicalRoutes(db: Db): Router {
     });
     res.status(201).json(out);
   }));
+
+  // §5.5 timer sweep, run by the scheduler every minute (like /shifts/check-late).
+  r.post('/escalations/check-timers', wrap((req) => runEscalationTimers(db, now(req))));
 
   r.post('/escalations/:id/ack', wrap((req) => {
     const staff = requireRole(db, req, 'DOCTOR', 'SUPERVISOR');

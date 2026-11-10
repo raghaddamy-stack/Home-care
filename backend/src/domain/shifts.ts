@@ -73,3 +73,50 @@ export function distanceMetres(a: { lat: number; lng: number }, b: { lat: number
 }
 
 export const CHECK_IN_RADIUS_M = 150;
+
+/** BR-33 nurse working-time limits ([Proposed], to confirm against the Jordan Labour Law and contracts). */
+export const MAX_HOURS_PER_7_DAYS = 60;
+export const MIN_REST_HOURS = 11;
+export const MAX_CONSECUTIVE_24H = 2;
+
+export interface TimeSlot {
+  start: Date;
+  end: Date;
+}
+
+/**
+ * Check one nurse's shifts (existing + proposed) against BR-33. Returns the violations, empty when compliant.
+ * - At least 11 h rest between shifts. The only exception is a live-in run of back-to-back 24 h shifts,
+ *   capped at 2 in a row.
+ * - At most 60 h in any rolling 7-day window.
+ */
+export function workingTimeViolations(slots: TimeSlot[]): string[] {
+  const s = [...slots].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const out: string[] = [];
+  const h = (ms: number) => ms / 3600_000;
+  const len = (x: TimeSlot) => h(x.end.getTime() - x.start.getTime());
+  const fmt = (d: Date) => d.toISOString().slice(0, 16).replace('T', ' ');
+
+  let chain24 = 0;
+  s.forEach((x, i) => {
+    if (i === 0) { chain24 = len(x) >= 24 ? 1 : 0; return; }
+    const prev = s[i - 1];
+    const rest = h(x.start.getTime() - prev.end.getTime());
+    if (rest < MIN_REST_HOURS) {
+      if (rest === 0 && len(x) >= 24 && len(prev) >= 24) chain24++;
+      else out.push(`Only ${Math.max(0, rest)} h rest before the shift at ${fmt(x.start)} (minimum ${MIN_REST_HOURS} h)`);
+    } else chain24 = len(x) >= 24 ? 1 : 0;
+    if (chain24 > MAX_CONSECUTIVE_24H) out.push(`More than ${MAX_CONSECUTIVE_24H} consecutive 24 h shifts at ${fmt(x.start)}`);
+  });
+
+  for (const anchor of s) {
+    const from = anchor.start.getTime();
+    const to = from + 7 * 86_400_000;
+    const hours = s.reduce((a, x) => a + Math.max(0, h(Math.min(x.end.getTime(), to) - Math.max(x.start.getTime(), from))), 0);
+    if (hours > MAX_HOURS_PER_7_DAYS) {
+      out.push(`${hours} h in the 7 days from ${fmt(anchor.start)} (maximum ${MAX_HOURS_PER_7_DAYS} h)`);
+      break;
+    }
+  }
+  return out;
+}

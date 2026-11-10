@@ -86,3 +86,17 @@ export function buildQuote(
   const sum = (k: keyof QuoteLine) => out.reduce((a, l) => a + (l[k] as number), 0);
   return { lines: out, total: sum('net'), payerTotal: sum('payerShare'), patientTotal: sum('patientShare') };
 }
+
+/** Quote validity (BR-12): 48 h, or 4 h for same-day and urgent requests. */
+export const QUOTE_VALIDITY_HOURS = { ROUTINE: 48, SAME_DAY: 4, URGENT: 4 } as const;
+export type Urgency = keyof typeof QUOTE_VALIDITY_HOURS;
+
+export function quoteValidUntil(issuedAt: Date, urgency: Urgency): Date {
+  return new Date(issuedAt.getTime() + QUOTE_VALIDITY_HOURS[urgency] * 3600_000);
+}
+
+export function isQuoteExpired(validUntil: string | Date | null | undefined, at: Date): boolean {
+  // Quotes from before BR-12 was enforced have no validity and never expire.
+  if (!validUntil) return false;
+  return at.getTime() > new Date(validUntil).getTime();
+}

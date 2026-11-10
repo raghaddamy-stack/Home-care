@@ -4,11 +4,10 @@ import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { CHECK_IN_RADIUS_M, distanceMetres } from '../domain/shifts.js';
 import { buildInvoiceLines } from '../domain/billing.js';
+import { noShowFee, prepaymentRequired } from '../domain/patientPolicy.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
-import { setStatus } from './requests.js';
-
-/** No-show fee: 50% of the visit price, minimum 10 JOD (BR-24). */
-export const NO_SHOW_MIN_FEE = 10_000;
+import { noShowDates, setStatus, visitFee } from './requests.js';
+import { ConsentInput, ensureConsent } from './consent.js';
 
 const FIELD_ROLES = ['DOCTOR', 'NURSE', 'LAB_TECH', 'RADIOGRAPHER', 'DRIVER'];
 
@@ -52,7 +51,10 @@ export function visitRoutes(db: Db): Router {
   r.get('/', wrap((req) => {
     const staffId = Number(req.query.staffId);
     return staffId
-      ? db.all(`SELECT v.*, r.request_no, p.full_name, p.address, p.lat, p.lng FROM visits v
+      ? db.all(`SELECT v.*, r.request_no, p.full_name, p.address, p.lat, p.lng,
+                  EXISTS (SELECT 1 FROM consents c WHERE c.patient_id = p.id AND c.type = 'GENERAL_TREATMENT' AND c.revoked_at IS NULL
+                          AND (c.expires_at IS NULL OR c.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))) AS has_consent
+                FROM visits v
                 JOIN service_requests r ON r.id = v.request_id JOIN patients p ON p.id = r.patient_id
                 WHERE v.staff_id = ? ORDER BY v.scheduled_at`, staffId)
       : db.all('SELECT * FROM visits ORDER BY scheduled_at DESC LIMIT 200');
@@ -71,7 +73,7 @@ export function visitRoutes(db: Db): Router {
 
   // Check-in by GPS (within 150 m) or by the patient's visit code (BR-26).
   r.post('/:id/check-in', wrap((req) => {
-    const body = z.object({ otp: z.string().optional(), lat: z.number().optional(), lng: z.number().optional() }).parse(req.body);
+    const body = z.object({ otp: z.string().optional(), lat: z.number().optional(), lng: z.number().optional(), consent: ConsentInput.optional() }).parse(req.body);
     const { visit, staff, request } = ownVisit(db, req);
     if (visit.status !== 'DISPATCHED') throw new HttpError(409, `Visit is ${visit.status}, dispatch it first`);
     const patient = getOr404(db, 'patients', request.patient_id);
@@ -85,6 +87,8 @@ export function visitRoutes(db: Db): Router {
       method = 'GPS';
     } else throw new HttpError(400, 'Send the visit code or GPS position');
     return db.tx(() => {
+      // BR-80: no treatment, sample or image without the patient's (or guardian's) consent.
+      ensureConsent(db, patient, visit.kind, now(req), staff.id, body.consent);
       db.update('visits', visit.id, { status: 'CHECKED_IN', check_in_at: now(req), check_in_method: method });
       setStatus(db, request, 'IN_PROGRESS', staff.id, `Check-in ${method}`);
       return { status: 'CHECKED_IN', method };
@@ -97,12 +101,13 @@ export function visitRoutes(db: Db): Router {
     return db.tx(() => {
       db.update('visits', visit.id, { status: 'NO_SHOW' });
       setStatus(db, request, 'NO_SHOW', staff.id);
-      const quote = db.get(`SELECT * FROM quotes WHERE request_id = ? AND status = 'ACCEPTED'`, request.id);
-      const fee = Math.max(NO_SHOW_MIN_FEE, Math.round((quote?.patient_total ?? 0) / 2));
+      const fee = noShowFee(visitFee(db, request.id));
       const invoiceId = createInvoice(db, { patient_id: request.patient_id, kind: 'VISIT', request_id: request.id }, buildInvoiceLines(
         [{ sourceType: 'VISIT', sourceId: visit.id, description: 'No-show fee', qty: 1, unitPrice: fee }], null));
-      notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no}: patient no-show, reschedule`);
-      return { status: 'NO_SHOW', invoiceId, fee };
+      // BR-24: from the 2nd no-show in 30 days the next booking must be prepaid.
+      const prepay = prepaymentRequired(noShowDates(db, request.patient_id), now(req));
+      notify(db, 'role:COORDINATOR', 'PUSH', `${request.request_no}: patient no-show, reschedule${prepay ? ' (prepayment required, BR-24)' : ''}`);
+      return { status: 'NO_SHOW', invoiceId, fee, prepaymentRequired: prepay };
     });
   }));
 
@@ -125,7 +130,7 @@ export function visitRoutes(db: Db): Router {
         if (it.line === 'LAB' || it.line === 'IMG') {
           const orderId = db.insert('orders', { request_id: request.id, service_code: it.service_code, department: it.department, ordered_by: staff.id, status: body.result ? 'VALIDATED' : 'IN_PROGRESS' });
           if (body.result) {
-            const resultId = db.insert('results', { order_id: orderId, patient_id: request.patient_id, report: body.result.report, critical: body.result.critical, validated_by: staff.id, released_at: body.result.critical ? undefined : at });
+            const resultId = db.insert('results', { order_id: orderId, patient_id: request.patient_id, report: body.result.report, critical: body.result.critical, validated_by: staff.id, released_at: body.result.critical ? undefined : at, created_at: at });
             out.resultId = resultId;
             if (body.result.critical) notify(db, 'role:DOCTOR', 'CALL', `CRITICAL result for ${request.request_no}: acknowledge result ${resultId}`);
             else notify(db, `patient:${request.patient_id}`, 'PUSH', `Your ${it.name_en} result is ready`);
@@ -149,11 +154,16 @@ export function visitRoutes(db: Db): Router {
       }));
       const invoiceId = createInvoice(db, { patient_id: request.patient_id, kind: 'VISIT', request_id: request.id }, lines);
       db.update('invoices', invoiceId, { status: 'ISSUED' });
+      // Money taken before the visit (BR-24 / BR-15) settles the invoice first.
+      for (const pre of db.all(`SELECT * FROM prepayments WHERE request_id = ? AND applied_invoice_id IS NULL`, request.id)) {
+        db.insert('payments', { invoice_id: invoiceId, method: pre.method, amount: pre.amount, reference: pre.reference ?? `prepayment #${pre.id}`, collected_by: pre.collected_by, at: pre.at });
+        db.update('prepayments', pre.id, { applied_invoice_id: invoiceId });
+      }
       if (body.payment) {
         db.insert('payments', { invoice_id: invoiceId, method: body.payment.method, amount: body.payment.amount, reference: body.payment.reference, collected_by: staff.id });
-        const paid = body.payment.amount >= quote.patient_total;
-        db.update('invoices', invoiceId, { status: paid ? 'PAID' : 'PARTIALLY_PAID' });
       }
+      const paid = db.get<{ s: number | null }>('SELECT SUM(amount) AS s FROM payments WHERE invoice_id = ?', invoiceId)!.s ?? 0;
+      if (paid > 0) db.update('invoices', invoiceId, { status: paid >= quote.patient_total ? 'PAID' : 'PARTIALLY_PAID' });
 
       db.update('visits', visit.id, { status: 'COMPLETED', completed_at: at });
       setStatus(db, request, 'COMPLETED', staff.id);

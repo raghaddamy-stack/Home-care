@@ -62,14 +62,14 @@ function SignIn({ onDone, onBack }: { onDone: () => void; onBack: () => void }) 
 // ---- Request tracking -------------------------------------------------------------
 const STEPS = ['الطلب', 'التسعير', 'موافقتك', 'الموعد', 'بالطريق', 'تمت'];
 const STEP_OF: Record<string, number> = {
-  SUBMITTED: 0, PENDING_INFO: 0, UNDER_REVIEW: 1, PENDING_PREAPPROVAL: 1, QUOTED: 2, ACCEPTED: 3, NO_SHOW: 3,
+  SUBMITTED: 0, PENDING_INFO: 0, UNDER_REVIEW: 1, PENDING_PREAPPROVAL: 1, QUOTED: 2, EXPIRED: 2, ACCEPTED: 3, NO_SHOW: 3,
   SCHEDULED: 3, DISPATCHED: 4, IN_PROGRESS: 5, COMPLETED: 5, CONVERTED_TO_EPISODE: 5, REFERRED_OUT: 5,
 };
 const PATIENT_STATUS: Record<string, string> = {
   PENDING_INFO: 'بدنا كم معلومة منك', UNDER_REVIEW: 'المنسق بيجهّز السعر', PENDING_PREAPPROVAL: 'بانتظار موافقة التأمين',
   QUOTED: 'السعر جاهز، بانتظار موافقتك', ACCEPTED: 'وافقت، عم نحجزلك موعد', SCHEDULED: 'تم حجز الموعد', DISPATCHED: 'الفريق بالطريق',
   IN_PROGRESS: 'الفريق عندك', COMPLETED: 'تمت الخدمة', CONVERTED_TO_EPISODE: 'بدأت الرعاية المنزلية', REFERRED_OUT: 'حوّلناك لجهة مختصة',
-  CANCELLED: 'ملغي', NO_SHOW: 'ما لقيناك بالبيت، رح نتواصل معك لموعد جديد',
+  EXPIRED: 'انتهت صلاحية عرض السعر، المنسق رح يبعتلك سعر محدّث', CANCELLED: 'ملغي', NO_SHOW: 'ما لقيناك بالبيت، رح نتواصل معك لموعد جديد',
 };
 
 function Stepper({ status }: { status: string }) {
@@ -85,6 +85,7 @@ function Stepper({ status }: { status: string }) {
 function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goProfile: () => void }) {
   const { busy, run } = useAction();
   const [declining, setDeclining] = useState(false);
+  const [consent, setConsent] = useState(false);
   const [reason, setReason] = useState('');
   const MISSING_AR: Record<string, string> = { dob: 'تاريخ الميلاد', gender: 'الجنس', phone: 'الهاتف', address: 'العنوان', 'gps location': 'موقعك على الخريطة', 'emergency contact': 'رقم للطوارئ', prescription: 'الوصفة الطبية' };
   return (
@@ -118,9 +119,13 @@ function RequestCard({ r, reload, goProfile }: { r: any; reload: () => void; goP
               <tr><td>المطلوب منك</td><td className="mono"><strong>{jod(r.quote.patientTotal)}</strong></td></tr>
             </tfoot>
           </table>
+          {r.status === 'QUOTED' && r.quote.validUntil && <p className="small muted">السعر صالح لغاية {fmtTime(r.quote.validUntil)}</p>}
+          {r.status === 'QUOTED' && !declining && (
+            <label className="check small"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /> أوافق على تلقّي الرعاية والخدمات الطبية في البيت (الموافقة العامة)</label>
+          )}
           {r.status === 'QUOTED' && !declining && (
             <div className="grid-2">
-              <button className="primary" disabled={busy} onClick={() => run(async () => { await api.post(`/me/requests/${r.id}/accept`); reload(); }, 'وصلت موافقتك، رح نحجزلك موعد')}>موافق</button>
+              <button className="primary" disabled={busy} onClick={() => run(async () => { await api.post(`/me/requests/${r.id}/accept`, { consentGeneral: consent }); reload(); }, 'وصلت موافقتك، رح نحجزلك موعد')}>موافق</button>
               <button className="ghost" onClick={() => setDeclining(true)}>مش موافق</button>
             </div>
           )}

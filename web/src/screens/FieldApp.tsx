@@ -35,6 +35,10 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
   const gps = useGps();
   const [otp, setOtp] = useState('');
   const [open, setOpen] = useState(false);
+  // BR-80: general consent captured on the device when the patient has none on file.
+  const [consented, setConsented] = useState(false);
+  const [signer, setSigner] = useState('');
+  const [relation, setRelation] = useState('SELF');
   const req = useLoad(() => (open ? api.get<any>(`/requests/${v.request_id}`) : Promise.resolve(null)), [open]);
 
   // completion form state
@@ -60,7 +64,8 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
   const route = req.data?.route;
 
   const checkIn = () => run(async () => {
-    const body = otp ? { otp } : await gps.get();
+    const body: Record<string, unknown> = otp ? { otp } : await gps.get();
+    if (!v.has_consent && consented) body.consent = { signedBy: signer || v.full_name, relation, method: 'ESIGN' };
     await api.post(`/visits/${v.id}/check-in`, body);
     reload();
   }, 'تم تسجيل الوصول');
@@ -83,6 +88,22 @@ function VisitCard({ v, reload }: { v: any; reload: () => void }) {
           <div className="row">
             <Field label="أو رمز الزيارة من المريض"><input inputMode="numeric" value={otp} onChange={(e) => setOtp(e.target.value)} maxLength={4} /></Field>
           </div>
+          {!v.has_consent && (
+            <div className="notice warn stack">
+              <label className="check"><input type="checkbox" checked={consented} onChange={(e) => setConsented(e.target.checked)} /> ما في موافقة على الملف: المريض أو ولي الأمر وقّع الموافقة العامة على العلاج{v.kind === 'IMAGING' ? ' وموافقة التصوير' : ''} على الجهاز</label>
+              {consented && (
+                <div className="grid-2">
+                  <Field label="اسم الموقّع"><input value={signer} onChange={(e) => setSigner(e.target.value)} placeholder={v.full_name} /></Field>
+                  <Field label="صلة القرابة" hint="أقل من 18 سنة: ولي الأمر يوقّع">
+                    <select value={relation} onChange={(e) => setRelation(e.target.value)}>
+                      <option value="SELF">المريض نفسه</option><option value="PARENT">أب / أم</option><option value="SPOUSE">زوج / زوجة</option>
+                      <option value="CHILD">ابن / ابنة</option><option value="SIBLING">أخ / أخت</option><option value="LEGAL_GUARDIAN">وصي قانوني</option>
+                    </select>
+                  </Field>
+                </div>
+              )}
+            </div>
+          )}
           <button className="primary block" disabled={busy} onClick={checkIn}>وصلت · تسجيل الحضور</button>
           <button className="ghost block" disabled={busy} onClick={() => run(async () => {
             const r = await api.post<{ fee: number }>(`/visits/${v.id}/no-show`);

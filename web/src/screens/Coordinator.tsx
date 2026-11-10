@@ -5,7 +5,7 @@ import { Drawer, Empty, Field, Pill, useAction, useLoad } from '../ui';
 
 const COLUMNS: { key: string; title: string; statuses: string[]; hint: string }[] = [
   { key: 'review', title: 'للمراجعة والتسعير', statuses: ['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL'], hint: 'سعّر ووجّه' },
-  { key: 'quoted', title: 'بانتظار موافقة المريض', statuses: ['QUOTED'], hint: 'تابع مع المريض' },
+  { key: 'quoted', title: 'بانتظار موافقة المريض', statuses: ['QUOTED', 'EXPIRED'], hint: 'تابع مع المريض' },
   { key: 'accepted', title: 'جاهز للجدولة', statuses: ['ACCEPTED', 'NO_SHOW'], hint: 'عيّن الكادر' },
   { key: 'field', title: 'بالميدان', statuses: ['SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'], hint: 'متابعة' },
 ];
@@ -44,6 +44,9 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
   const [assignee, setAssignee] = useState('');
   const [when, setWhen] = useState('');
   const [reason, setReason] = useState('');
+  const [byCompany, setByCompany] = useState(false);
+  const [preAmount, setPreAmount] = useState('');
+  const [preMethod, setPreMethod] = useState('LINK');
 
   const line = d ? services.find((s) => s.code === d.items[0]?.service_code)?.line : undefined;
   const roles = route === 'DIRECT' ? LINE_ROLES[line ?? ''] ?? [] : ELIGIBLE[route];
@@ -69,9 +72,9 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
             {d.clinical_notes && <div className="wide"><span className="k">ملاحظات</span><span>{d.clinical_notes}</span></div>}
           </div>
 
-          {['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL', 'QUOTED'].includes(d.status) && (
+          {['SUBMITTED', 'UNDER_REVIEW', 'PENDING_PREAPPROVAL', 'QUOTED', 'EXPIRED'].includes(d.status) && (
             <section className="action">
-              <h3>{d.status === 'QUOTED' ? 'تعديل عرض السعر' : 'التسعير'}</h3>
+              <h3>{d.status === 'QUOTED' ? 'تعديل عرض السعر' : d.status === 'EXPIRED' ? 'العرض انتهى: سعّر من جديد' : 'التسعير'}</h3>
               <div className="grid-3">
                 <Field label="خصم %" hint="فوق 10% بدها موافقة مشرف"><input id="disc" type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))} /></Field>
                 {discount > 10 && (
@@ -107,6 +110,7 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 </tbody>
                 <tfoot><tr><td colSpan={2}>المجموع</td><td className="mono">{jod(latestQuote.total)}</td><td className="mono">{jod(latestQuote.payer_total)}</td><td className="mono"><strong>{jod(latestQuote.patient_total)}</strong></td></tr></tfoot>
               </table>
+              {latestQuote.valid_until && latestQuote.status === 'SENT' && <p className="small muted">صالح لغاية {fmtTime(latestQuote.valid_until)} (48 ساعة، و4 ساعات لطلبات نفس اليوم)</p>}
               {d.status === 'QUOTED' && (
                 <button className="secondary" disabled={busy} onClick={() => run(async () => { await api.post(`/requests/${id}/accept`, { evidence: 'phone' }); after(); }, 'تم تسجيل موافقة المريض')}>
                   المريض وافق بالتلفون
@@ -134,6 +138,19 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 </Field>
                 <Field label="الموعد"><input id="swhen" type="datetime-local" value={at} onChange={(e) => setWhen(e.target.value)} /></Field>
               </div>
+              {d.prepayment?.outstanding > 0 && (
+                <div className="notice warn stack">
+                  <span>المريض عنده غيابين أو أكثر خلال 30 يوم: لازم يدفع {jod(d.prepayment.outstanding)} مسبقاً قبل الحجز.</span>
+                  <div className="row">
+                    <Field label="المبلغ (د.أ)"><input inputMode="decimal" value={preAmount} onChange={(e) => setPreAmount(e.target.value)} placeholder={(d.prepayment.outstanding / 1000).toFixed(3)} /></Field>
+                    <Field label="الطريقة"><select value={preMethod} onChange={(e) => setPreMethod(e.target.value)}><option value="LINK">رابط دفع</option><option value="CLIQ">CliQ</option><option value="CARD">بطاقة</option><option value="TRANSFER">تحويل</option></select></Field>
+                    <button className="secondary" disabled={busy} onClick={() => run(async () => {
+                      await api.post(`/requests/${id}/prepayments`, { method: preMethod, amount: Math.round(Number(preAmount || d.prepayment.outstanding / 1000) * 1000) });
+                      setPreAmount(''); after();
+                    }, 'تم تسجيل الدفعة المسبقة')}>تسجيل الدفعة</button>
+                  </div>
+                </div>
+              )}
               <button className="primary" disabled={busy || !assignee} onClick={() => run(async () => {
                 await api.post(`/requests/${id}/schedule`, { route, staffId: Number(assignee), scheduledAt: localToIso(at) });
                 after();
@@ -152,13 +169,15 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
             </section>
           )}
 
-          {!['COMPLETED', 'CANCELLED', 'CONVERTED_TO_EPISODE', 'REFERRED_OUT', 'DISPATCHED', 'IN_PROGRESS'].includes(d.status) && (
+          {!['COMPLETED', 'CANCELLED', 'CONVERTED_TO_EPISODE', 'REFERRED_OUT', 'IN_PROGRESS'].includes(d.status) && (
             <section className="action danger-zone">
               <h3>إلغاء الطلب</h3>
               <div className="row">
                 <Field label="السبب"><input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="مثلاً: السعر مرتفع" /></Field>
-                <button className="danger" disabled={busy || reason.trim().length < 3} onClick={() => run(async () => { await api.post(`/requests/${id}/cancel`, { reason }); after(); }, 'تم الإلغاء')}>إلغاء</button>
+                <button className="danger" disabled={busy || reason.trim().length < 3} onClick={() => run(async () => { await api.post(`/requests/${id}/cancel`, { reason, initiatedBy: byCompany ? 'COMPANY' : 'PATIENT' }); after(); }, 'تم الإلغاء')}>إلغاء</button>
               </div>
+              <label className="check small"><input type="checkbox" checked={byCompany} onChange={(e) => setByCompany(e.target.checked)} /> الإلغاء من طرفنا (بدون رسوم)</label>
+              {!byCompany && d.cancellation?.fee > 0 && <p className="small">رسوم إلغاء على المريض حسب السياسة: <strong>{jod(d.cancellation.fee)}</strong> ({d.cancellation.pct}%). مجاني إذا قبل الموعد بأكثر من 24 ساعة.</p>}
             </section>
           )}
 
