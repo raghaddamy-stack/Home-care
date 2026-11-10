@@ -63,5 +63,28 @@ export function catalogRoutes(db: Db): Router {
     return db.all('SELECT * FROM notifications WHERE (? IS NULL OR recipient = ?) ORDER BY id DESC LIMIT 100', to ?? null, to ?? null);
   }));
 
+  // Coordinator board feeds.
+  r.get('/episodes', wrap((req) => {
+    const status = (req.query.status as string | undefined) ?? null;
+    return db.all(
+      `SELECT e.*, p.full_name, p.address,
+         (SELECT shift_hours || 'h × ' || hours_per_day || 'h/day × ' || duration_days || 'd' FROM care_plans c WHERE c.episode_id = e.id ORDER BY version DESC LIMIT 1) AS plan,
+         (SELECT COUNT(*) FROM care_plans c WHERE c.episode_id = e.id) AS plan_count,
+         (SELECT COUNT(*) FROM shifts s WHERE s.episode_id = e.id AND s.status IN ('PLANNED','LATE','CHECKED_IN')) AS open_shifts
+       FROM episodes e JOIN patients p ON p.id = e.patient_id
+       WHERE (? IS NULL OR e.status = ?) ORDER BY e.id DESC LIMIT 200`,
+      status, status,
+    );
+  }));
+
+  r.get('/escalations', wrap((req) => {
+    const status = (req.query.status as string | undefined) ?? null;
+    return db.all(
+      `SELECT x.*, e.episode_no, p.full_name FROM escalations x JOIN episodes e ON e.id = x.episode_id JOIN patients p ON p.id = e.patient_id
+       WHERE (? IS NULL OR x.status = ?) ORDER BY x.id DESC LIMIT 200`,
+      status, status,
+    );
+  }));
+
   return r;
 }

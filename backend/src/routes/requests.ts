@@ -167,10 +167,19 @@ export function requestRoutes(db: Db): Router {
   }));
 
   r.get('/', wrap((req) => {
-    const status = req.query.status as string | undefined;
-    return status
-      ? db.all('SELECT * FROM service_requests WHERE status = ? ORDER BY id DESC', status)
-      : db.all('SELECT * FROM service_requests ORDER BY id DESC LIMIT 200');
+    // ?status=A,B filters; each row carries the patient name and the requested services for the boards.
+    const statuses = (req.query.status as string | undefined)?.split(',').filter(Boolean) ?? [];
+    const where = statuses.length ? `WHERE r.status IN (${statuses.map(() => '?').join(',')})` : '';
+    return db.all(
+      `SELECT r.*, p.full_name, p.phone, p.national_id,
+         (SELECT group_concat(i.service_code, ', ') FROM request_items i WHERE i.request_id = r.id) AS services,
+         (SELECT q.patient_total FROM quotes q WHERE q.request_id = r.id AND q.status IN ('SENT','ACCEPTED') ORDER BY q.version DESC LIMIT 1) AS patient_total,
+         (SELECT q.total FROM quotes q WHERE q.request_id = r.id AND q.status IN ('SENT','ACCEPTED') ORDER BY q.version DESC LIMIT 1) AS quote_total,
+         (SELECT note FROM request_history h WHERE h.request_id = r.id ORDER BY h.id DESC LIMIT 1) AS last_note
+       FROM service_requests r JOIN patients p ON p.id = r.patient_id ${where}
+       ORDER BY CASE r.urgency WHEN 'URGENT' THEN 0 WHEN 'SAME_DAY' THEN 1 ELSE 2 END, r.id DESC LIMIT 300`,
+      ...statuses,
+    );
   }));
 
   r.get('/:id', wrap((req) => {

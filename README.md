@@ -9,6 +9,26 @@ An integrated home-care system covering intake (app and call center), coordinato
 | [`docs/workflow-bpmn.html`](docs/workflow-bpmn.html) | BPMN 2.0 swimlane diagram of the full process. Click a step to see who does it and which system module covers it. |
 | [`docs/business-requirements.md`](docs/business-requirements.md) | Business requirements: roles and permissions, data model, state machines, business rules, gaps in the original workflow, KPIs, and a phased roadmap. |
 
+## Run it
+
+```bash
+cd backend && npm install && cd ../web && npm install && npm run build
+cd ../backend && npm run dev     # API + web console on http://localhost:3000
+```
+
+For UI development run `npm run dev` in `web/` too (http://localhost:5173, proxies `/api` to the backend).
+
+## Web console (`web/`)
+
+React + Vite, Arabic right-to-left, light and dark themes. Pick a demo account on the login screen. Each role sees its own screens:
+
+| Role | Screen | What it does |
+|---|---|---|
+| Call center | الكول سنتر | Phone intake: national-ID lookup or new file, services with cash estimate, insurance, and a follow-up list for requests with missing data |
+| Coordinator | لوحة المنسق | Request board (review → patient approval → scheduling → in the field); drawer to price (discount approval, pre-approval no.), record phone acceptance, route and assign staff (same-zone first), cancel with reason, history. Home-care tab builds rosters from the doctor's care plan. Alerts tab: late check-ins with backup nurse, open escalations |
+| Nurse / doctor / lab / radiology / driver | تطبيق الكادر | Mobile layout. Visits: on my way, check in by GPS or patient code, no-show, finish with result / device handover / payment. Assessment visits open the episode or refer out. Nurses: shifts, vitals with live NEWS2, notes, handover and check-out. Doctors: case list with escalations, results to review, care plan, orders, discharge. Departments: order worklist |
+| Finance | المالية | Run the weekly/monthly cycle, review lines, issue (blocked if hours ≠ attendance), record payments |
+
 ## Backend (`backend/`)
 
 Node 22 + TypeScript + Express. Uses the built-in `node:sqlite` for development, and the schema is plain SQL so it can move to PostgreSQL.
@@ -51,6 +71,6 @@ Authentication is a placeholder: send `x-staff-id` (see `src/seed.ts` for demo s
 ### Next steps
 
 1. Real authentication and role-based access (JWT/SSO) plus an audit of clinical reads.
-2. Web console for the call center, coordinator, departments and finance; mobile apps for patients and staff.
+2. Patient app (booking, quote acceptance by OTP, live tracking, results, invoices) and native packaging of the staff app.
 3. Consent forms, MAR and medication reconciliation, guardian portal (see BRD §6).
 4. SMS/push gateway, payment gateway, LIS/PACS and insurer integrations.
