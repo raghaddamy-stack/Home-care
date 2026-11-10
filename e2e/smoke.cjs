@@ -21,8 +21,11 @@ async function step(name, fn) {
     results.push({ name, ok: true, ms: Date.now() - t });
     console.log(`PASS  ${name}`);
   } catch (e) {
-    results.push({ name, ok: false, ms: Date.now() - t, error: String(e.message || e).split('\n')[0] });
-    console.log(`FAIL  ${name}\n      ${String(e.message || e).split('\n')[0]}`);
+    const lines = String(e.message || e).split('\n');
+    const waiting = lines.find((l) => /waiting for/.test(l));
+    const msg = (lines[0] + (waiting ? ` (${waiting.replace(/\x1b\[[0-9;]*m/g, '').replace(/.*waiting for /, 'waiting for ').trim()})` : '')).slice(0, 300);
+    results.push({ name, ok: false, ms: Date.now() - t, error: msg });
+    console.log(`FAIL  ${name}\n      ${msg}`);
   }
 }
 
@@ -68,14 +71,14 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   await step('Owner: switch on e-invoicing (mock) and seller data from settings', async () => {
     const p = await page();
     await p.goto(B); await p.waitForTimeout(500); await shot(p, 'login');
-    await login(p, /^Admin/);
+    await login(p, /Admin/);
     await p.getByRole('button', { name: 'إعدادات المالك' }).click();
     await p.locator('.settings-nav button', { hasText: 'الفوترة الإلكترونية' }).click();
     await p.locator('#set-einvoiceProvider').selectOption('MOCK');
     await p.locator('#set-sellerTin').fill('12345678');
     await p.locator('#set-sellerName').fill('شركة رعاية للخدمات الطبية المنزلية');
     await p.locator('#set-incomeSourceSequence').fill('9876543');
-    await p.locator('.settings-side').getByRole('button', { name: 'حفظ' }).click();
+    await p.locator('button:visible', { hasText: /^\s*حفظ\s*$/ }).first().click();
     await expectToast(p, /تم حفظ/);
     await shot(p, 'owner-settings');
     await p.close();
@@ -84,7 +87,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   let apiKey = '';
   await step('Owner: create an ERP API key', async () => {
     const p = await page();
-    await login(p, /^Admin/);
+    await login(p, /Admin/);
     await p.getByRole('button', { name: 'الربط مع الأنظمة' }).click();
     await p.getByRole('button', { name: 'إنشاء مفتاح' }).click();
     await expectToast(p, /انعمل المفتاح/);
@@ -116,7 +119,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.getByLabel('العنوان بالتفصيل').fill('عمّان، الجبيهة، شارع الجامعة');
     await p.getByRole('button', { name: 'استخدم موقعي الحالي' }).click();
     await p.getByLabel('رقم شخص للطوارئ').fill('زوجها 0790000000');
-    await p.getByRole('button', { name: 'حفظ', exact: true }).click();
+    await p.getByRole('button', { name: 'حفظ بياناتي' }).click();
     await expectToast(p, /تم حفظ/);
     await noOverflow(p, 'patient app');
     await shot(p, 'patient-file');
@@ -162,7 +165,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await pp.getByLabel('الرمز').fill(code);
     await pp.getByRole('button', { name: 'دخول' }).click();
     await shot(pp, 'patient-quote');
-    await pp.getByRole('button', { name: 'موافق', exact: true }).click();
+    await pp.getByRole('button', { name: 'موافق على السعر' }).click();
     await expectToast(pp, /موافقتك/);
     await pp.close();
     await p.reload();
@@ -264,7 +267,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.getByLabel('التشخيص').fill('رعاية بعد جلطة دماغية');
     await p.getByLabel(/Braden/).fill('14');
     await p.getByLabel('الحساسية').fill('بنسلين');
-    await p.getByRole('button', { name: 'حفظ', exact: true }).click();
+    await p.getByRole('button', { name: 'حفظ التقييم' }).click();
     await expectToast(p, /انفتح ملف/);
     await p.getByRole('tab', { name: 'حالاتي' }).click();
     await p.locator('.visit-head').first().click();
@@ -328,7 +331,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     const n = await p.locator('.news').textContent();
     if (!/5/.test(n)) throw new Error(`NEWS2 shown: ${n}`);
     await shot(p, 'field-nurse-news2');
-    await p.getByLabel('الملاحظة').fill('المريض مرتاح بعد خافض الحرارة');
+    await p.getByLabel('الملاحظة', { exact: true }).fill('المريض مرتاح بعد خافض الحرارة');
     await p.getByRole('button', { name: 'حفظ الملاحظة' }).click();
     await expectToast(p, /تم حفظ الملاحظة/);
     await p.getByLabel(/ملخص التسليم/).fill('حرارة 38.5 بعد خافض، تبليغ الطبيب، المتابعة كل ساعة');
@@ -364,7 +367,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.getByRole('button', { name: 'تسجيل' }).click();
     await expectToast(p, /تم تسجيل الدفعة/);
     await p.waitForTimeout(2500);
-    await p.getByRole('button', { name: 'الفاتورة الضريبية' }).click();
+    await p.getByRole('tab', { name: 'الفاتورة الضريبية' }).click();
     await p.locator('.invoice-doc .qr svg').waitFor({ timeout: 8000 });
     await shot(p, 'finance-invoice');
     await p.keyboard.press('Escape');
@@ -396,7 +399,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   // ---------------------------------------------------------------- layout checks
   await step('Every screen fits a phone (no sideways scroll)', async () => {
     const screens = [
-      [/Omar/, null], [/Omar/, 'الرعاية المنزلية والشفتات'], [/Omar/, 'التنبيهات'], [/Lina/, null], [/Huda/, null], [/^Admin/, null],
+      [/Omar/, null], [/Omar/, 'الرعاية المنزلية والشفتات'], [/Omar/, 'التنبيهات'], [/Lina/, null], [/Huda/, null], [/Admin/, null],
     ];
     for (const [who, tab] of screens) {
       const p = await page('phone');

@@ -47,6 +47,8 @@ cd backend && npm test        # 125 API/unit tests
 | 3 | Medium | The invoice list and invoice detail were readable without finance or coordinator rights. | Restricted to those roles. |
 | 4 | Low | Malformed JSON or a body over 1 MB returned **500 Internal error**. | Now returns 400 (not valid JSON) or 413 (too large). |
 
+After the UI/UX redesign was merged, the browser suite was updated for the renamed buttons and re-run: **17/17 pass**, with no sideways scroll on phones and no JavaScript errors. The runner now stops its own server process tree and refuses to start if the port is busy, because a leftover server from an earlier run had made results unreliable.
+
 Earlier rounds (Product Owner and Business Analyst reviews, settings) fixed further issues; see `docs/ba-gap-analysis.md` and `docs/product-backlog.md`.
 
 ## Known limitations (not defects, need decisions or setup)
