@@ -67,6 +67,11 @@ Authentication is a placeholder: send `x-staff-id` (see `src/seed.ts` for demo s
 - Billable time = actual attendance rounded to 15 min (up to 10 min lateness forgiven).
 - NEWS2 auto-score: single-parameter 3 → urgent review, 5–6 → on-call doctor, ≥7 → emergency and episode on hold.
 - Critical results stay open until the doctor acknowledges them.
+- Quotes expire after 48 h (4 h same-day); late patient cancellations carry a fee by notice time; the 2nd no-show in 30 days needs prepayment.
+- General consent is required before the first visit (guardian for minors).
+- Escalation timers: unanswered critical results and NEWS2 5–6 go to the medical director (`POST /api/escalations/check-timers`, run every minute).
+- Nurse working-time limits on rosters and backups (11 h rest, 60 h / 7 days), supervisor override with reason.
+- Gap analysis of the BRD vs the code: [`docs/ba-gap-analysis.md`](docs/ba-gap-analysis.md).
 - Billing runs per episode cycle (weekly Sat–Sat or monthly), can be run more than once without duplicate invoices, and invoice hours must match attendance before issue.
 
 ### Next steps
