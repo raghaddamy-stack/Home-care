@@ -67,6 +67,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   // ---------------------------------------------------------------- owner setup
   await step('Owner: switch on e-invoicing (mock) and seller data from settings', async () => {
     const p = await page();
+    await p.goto(B); await p.waitForTimeout(500); await shot(p, 'login');
     await login(p, /^Admin/);
     await p.getByRole('button', { name: 'إعدادات المالك' }).click();
     await p.locator('.settings-nav button', { hasText: 'الفوترة الإلكترونية' }).click();
@@ -160,6 +161,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     const code = (await pp.locator('.notice strong').first().textContent()).trim();
     await pp.getByLabel('الرمز').fill(code);
     await pp.getByRole('button', { name: 'دخول' }).click();
+    await shot(pp, 'patient-quote');
     await pp.getByRole('button', { name: 'موافق', exact: true }).click();
     await expectToast(pp, /موافقتك/);
     await pp.close();
@@ -175,6 +177,17 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.keyboard.press('Escape');
     await shot(p, 'coordinator-board');
     await p.close();
+    const pt = await page('phone');
+    await pt.goto(B + '/#patient');
+    await pt.getByLabel('الرقم الوطني').fill('9881231231');
+    await pt.getByLabel('رقم الموبايل').fill('0791231231');
+    await pt.getByRole('button', { name: 'أرسل رمز التحقق' }).click();
+    const c2 = (await pt.locator('.notice strong').first().textContent()).trim();
+    await pt.getByLabel('الرمز').fill(c2);
+    await pt.getByRole('button', { name: 'دخول' }).click();
+    await pt.waitForTimeout(600);
+    await shot(pt, 'patient-tracker');
+    await pt.close();
   });
 
   // ---------------------------------------------------------------- lab tech
@@ -187,6 +200,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.getByRole('button', { name: /وصلت/ }).click();
     await expectToast(p, /تم تسجيل الوصول/);
     await p.getByRole('button', { name: 'إنهاء الزيارة' }).click();
+    await shot(p, 'field-visit');
     await p.getByLabel(/النتيجة/).fill('CBC طبيعي');
     await p.getByLabel(/المبلغ المحصّل/).fill('8');
     await noOverflow(p, 'field app');
@@ -341,6 +355,7 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
     await p.getByLabel('تاريخ التشغيل').fill(nextWeek);
     await p.getByRole('button', { name: 'تشغيل الفوترة الدورية' }).click();
     await expectToast(p, /طلعت الفواتير/);
+    await shot(p, 'finance-list');
     const row = p.locator('tr', { hasText: 'دورية' }).first();
     await row.getByRole('button', { name: 'فتح' }).click();
     await p.getByRole('button', { name: 'مطابقة مع الحضور وإصدار' }).click();
