@@ -64,7 +64,12 @@ export function toUbl(db: Db, e: Row): UblInvoice {
     : paid >= inv.patient_total && inv.payer_total === 0 ? '011' : '021';
 
   let original: UblInvoice['original'];
-  if (e.type_code === '381') {
+  if (e.type_code === '381' && inv.credit_for) {
+    // A credit note that cancels a specific invoice references that invoice.
+    const o = db.get(`SELECT i.invoice_no, i.total, x.uuid FROM invoices i JOIN einvoices x ON x.invoice_id = i.id WHERE i.id = ? AND x.status = 'ACCEPTED'`, inv.credit_for);
+    if (!o) throw new EInvoiceError('The original invoice of this credit note was not accepted by the tax system');
+    original = { number: o.invoice_no, uuid: o.uuid, total: o.total, reason: inv.void_reason ?? 'Invoice cancelled' };
+  } else if (e.type_code === '381') {
     // A credit (e.g. advance nursing billed but not delivered) corrects the patient's last accepted invoice.
     const o = db.get(
       `SELECT i.invoice_no, i.total, x.uuid FROM einvoices x JOIN invoices i ON i.id = x.invoice_id

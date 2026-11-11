@@ -8,6 +8,7 @@ import { billableMinutes, buildRoster, distanceMetres, isLate, SHIFT_PATTERNS, w
 import { dueAt, isOverdue, timerFor } from '../domain/escalation.js';
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
 import { assertStaffAvailable, genderCheck, setStatus } from './requests.js';
+import { servicePrice } from './lifecycle.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
 /**
@@ -53,7 +54,7 @@ function openEscalation(db: Db, episodeId: number, trigger: string, level: strin
  */
 /** Flag shifts whose nurse has not checked in after the grace period (also run by the server every few minutes). */
 export function checkLateShifts(db: Db, t: Date): number[] {
-  const open = db.all(`SELECT * FROM shifts WHERE status = 'PLANNED' AND planned_start <= ?`, t.toISOString());
+  const open = db.all(`SELECT s.* FROM shifts s JOIN episodes e ON e.id = s.episode_id WHERE s.status = 'PLANNED' AND e.status = 'ACTIVE' AND s.planned_start <= ?`, t.toISOString());
   const late = open.filter((s) => isLate(new Date(s.planned_start), null, t));
   db.tx(() => {
     for (const s of late) {
@@ -223,7 +224,7 @@ export function clinicalRoutes(db: Db): Router {
     if (ep.status !== 'ACTIVE') throw new HttpError(409, `Episode is ${ep.status}`);
     const svc = db.get('SELECT * FROM services WHERE code = ?', body.serviceCode);
     if (!svc) throw new HttpError(400, `Unknown service ${body.serviceCode}`);
-    const id = db.insert('orders', { episode_id: ep.id, service_code: svc.code, department: svc.department, priority: body.priority, ordered_by: staff.id, notes: body.notes });
+    const id = db.insert('orders', { episode_id: ep.id, service_code: svc.code, department: svc.department, priority: body.priority, ordered_by: staff.id, notes: body.notes, created_at: now(req) });
     notify(db, `dept:${svc.department}`, 'PUSH', `${body.priority} order #${id} (${svc.name_en}) for ${ep.episode_no}`);
     res.status(201).json({ id, department: svc.department });
   }));
@@ -250,17 +251,40 @@ export function clinicalRoutes(db: Db): Router {
 
   r.post('/orders/:id/result', wrap((req, res) => {
     const staff = requireRole(db, req, 'LAB_TECH', 'RADIOGRAPHER', 'PHARMACIST', 'DRIVER');
-    const body = z.object({ report: z.string().min(1), critical: z.boolean().default(false) }).parse(req.body);
+    const body = z.object({ report: z.string().min(1), critical: z.boolean().default(false), serialNo: z.string().optional() }).parse(req.body);
     const o = getOr404(db, 'orders', req.params.id, 'Order');
     if (!['PLACED', 'ACCEPTED', 'IN_PROGRESS'].includes(o.status)) throw new HttpError(409, `Order is ${o.status}`);
-    const ep = getOr404(db, 'episodes', o.episode_id, 'Episode');
+    const at = now(req);
+    // Home-care order (episode) or a sample / scan taken on an outpatient visit and resulted later (request).
+    const ep = o.episode_id ? getOr404(db, 'episodes', o.episode_id, 'Episode') : undefined;
+    const request = !ep && o.request_id ? getOr404(db, 'service_requests', o.request_id, 'Request') : undefined;
+    const patientId = ep?.patient_id ?? request?.patient_id;
+    if (!patientId) throw new HttpError(409, 'Order has no patient');
     const out = db.tx(() => {
-      const id = db.insert('results', { order_id: o.id, patient_id: ep.patient_id, report: body.report, critical: body.critical, validated_by: staff.id, created_at: now(req) });
+      const id = db.insert('results', {
+        order_id: o.id, patient_id: patientId, report: body.report, critical: body.critical, validated_by: staff.id, created_at: at,
+        // Outpatient results go to the patient straight away unless critical (same rule as at the visit).
+        released_at: !ep && !body.critical ? at : undefined,
+      });
       db.update('orders', o.id, { status: 'VALIDATED' });
-      if (body.critical) {
-        openEscalation(db, ep.id, 'CRITICAL_RESULT', 'CRITICAL', 'Doctor must acknowledge within 30 min', now(req), id);
+      if (ep && o.department === 'EQUIPMENT') {
+        // Delivered device: the rental starts now and is billed by day with the episode's invoices.
+        const policy = ep.policy_id ? db.get<{ payer_id: number }>('SELECT payer_id FROM insurance_policies WHERE id = ?', ep.policy_id) : undefined;
+        db.insert('rentals', {
+          patient_id: ep.patient_id, episode_id: ep.id, service_code: o.service_code, serial_no: body.serialNo, start_date: at,
+          expected_return: new Date(at.getTime() + 30 * 86_400_000), daily_rate: servicePrice(db, o.service_code, policy?.payer_id ?? null), deposit: 0,
+        });
+      }
+      if (ep && body.critical) {
+        openEscalation(db, ep.id, 'CRITICAL_RESULT', 'CRITICAL', 'Doctor must acknowledge within 30 min', at, id);
         notifyDoctor(db, ep.doctor_id, 'CALL', `CRITICAL result for ${ep.episode_no}`);
-      } else notifyDoctor(db, ep.doctor_id, 'PUSH', `Result ready for review (${ep.episode_no})`);
+      } else if (ep) {
+        notifyDoctor(db, ep.doctor_id, 'PUSH', `Result ready for review (${ep.episode_no})`);
+      } else if (body.critical) {
+        for (const rcpt of escalationRecipients('ONCALL_DOCTOR')) notify(db, rcpt, 'CALL', `CRITICAL result for ${request!.request_no}: acknowledge result ${id}`);
+      } else {
+        notify(db, `patient:${patientId}`, 'PUSH', 'Your result is ready');
+      }
       return { id, critical: body.critical };
     });
     res.status(201).json(out);
@@ -356,6 +380,7 @@ export function clinicalRoutes(db: Db): Router {
     const { shift, staff } = nurseShift(db, req);
     if (!['PLANNED', 'LATE'].includes(shift.status)) throw new HttpError(409, `Shift is ${shift.status}`);
     const ep = getOr404(db, 'episodes', shift.episode_id);
+    if (ep.status !== 'ACTIVE') throw new HttpError(409, `Care is ${ep.status === 'ON_HOLD' ? 'on hold' : ep.status}: check with the coordinator before starting`);
     const p = getOr404(db, 'patients', ep.patient_id);
     if (p.lat !== null) {
       const d = distanceMetres(body, { lat: p.lat, lng: p.lng });
@@ -390,7 +415,7 @@ export function clinicalRoutes(db: Db): Router {
       if (needsEscalation(score)) {
         escalationId = openEscalation(db, ep.id, 'NEWS2', score.band, score.action, now(req), id);
         if (score.band === 'HIGH') {
-          db.update('episodes', ep.id, { status: 'ON_HOLD' });
+          db.update('episodes', ep.id, { status: 'ON_HOLD', hold_reason: `NEWS2 ${score.total}: emergency` });
           notifyDoctor(db, ep.doctor_id, 'CALL', `NEWS2 ${score.total} for ${ep.episode_no}: ambulance called`);
           notify(db, `patient:${ep.patient_id}`, 'CALL', 'Emergency: family informed, ambulance on the way');
         } else {

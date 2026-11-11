@@ -352,6 +352,8 @@ export function requestRoutes(db: Db): Router {
       discountPct: z.number().min(0).max(100).default(0),
       approvedBy: z.number().int().optional(),
       preApprovalNo: z.string().optional(),
+      // The insurer refused the pre-approval: price the request as cash so the patient can still decide.
+      asCash: z.boolean().default(false),
       scheduledAt: z.string().datetime().optional(),
     }).parse(req.body);
     const request = getOr404(db, 'service_requests', req.params.id, 'Request');
@@ -365,7 +367,7 @@ export function requestRoutes(db: Db): Router {
 
     return db.tx(() => {
       const items = db.all('SELECT i.*, s.requires_preapproval FROM request_items i JOIN services s ON s.code = i.service_code WHERE request_id = ?', request.id);
-      const { coverage, payerId } = coverageFor(db, request.policy_id);
+      const { coverage, payerId } = body.asCash ? { coverage: undefined, payerId: null } : coverageFor(db, request.policy_id);
       if (coverage && !body.preApprovalNo && items.some((i) => i.requires_preapproval && coverage.coveredCodes.includes(i.service_code))) {
         if (request.status !== 'PENDING_PREAPPROVAL') setStatus(db, request, 'PENDING_PREAPPROVAL', staff.id, 'Sent to insurer');
         return { status: request.status, message: 'Waiting for insurer pre-approval. Call again with preApprovalNo.' };

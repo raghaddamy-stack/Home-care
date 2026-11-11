@@ -458,3 +458,14 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (client_id, key)
 );
+
+-- Money received from the insurer / payer against the payer share of an invoice.
+CREATE TABLE IF NOT EXISTS payer_payments (
+  id INTEGER PRIMARY KEY,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  amount INTEGER NOT NULL,
+  reference TEXT,
+  recorded_by INTEGER REFERENCES staff(id),
+  source TEXT NOT NULL DEFAULT 'HOME_CARE',
+  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

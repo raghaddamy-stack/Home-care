@@ -57,6 +57,18 @@ export class Db {
     add('payers', 'erp_code', 'TEXT');
     add('patients', 'erp_code', 'TEXT');
     add('patients', 'updated_at', 'TEXT');
+    // Closing every lifecycle loop: billed orders, credit notes, insurer receivable, episode closure, rental return.
+    add('orders', 'invoice_id', 'INTEGER');
+    add('invoices', 'credit_for', 'INTEGER');
+    add('invoices', 'void_reason', 'TEXT');
+    add('invoices', 'payer_paid', 'INTEGER NOT NULL DEFAULT 0');
+    add('episodes', 'closed_at', 'TEXT');
+    add('episodes', 'hold_reason', 'TEXT');
+    add('episodes', 'final_billed_at', 'TEXT');
+    add('rentals', 'return_condition', 'TEXT');
+    add('rentals', 'damage_charge', 'INTEGER');
+    add('rentals', 'paid_days', 'INTEGER');
+    add('rentals', 'return_invoice_id', 'INTEGER');
     this.raw.exec(`UPDATE invoices SET updated_at = created_at WHERE updated_at IS NULL; UPDATE patients SET updated_at = created_at WHERE updated_at IS NULL;`);
     // Keep updated_at current so the ERP can pull changes since its last sync.
     this.raw.exec(`

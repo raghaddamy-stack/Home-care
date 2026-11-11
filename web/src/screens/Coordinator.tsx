@@ -4,6 +4,7 @@ import { api, escalationAr, fmtTime, isoToLocal, jod, localToIso, noteAr, ROLE_A
 import { Drawer, Empty, Field, Loading, Pill, useAction, useLoad, useToast } from '../ui';
 import { Icon } from '../icons';
 import { agoAr, LiveStamp, minutesSince, usePolling, useUpdatedAt } from '../live';
+import { Devices } from './Devices';
 import { KpiStrip, SlaBadge, type Dashboard } from './CoordinatorKpis';
 
 const COLUMNS: { key: string; title: string; statuses: string[]; hint: string; empty: string }[] = [
@@ -110,6 +111,12 @@ function RequestDrawer({ id, onClose, onChanged, staff, services }: { id: number
                 if (res.message) throw new Error('الخدمة بدها موافقة التأمين المسبقة. أدخل رقم الموافقة لما توصل.');
                 after();
               }, 'انبعت عرض السعر للمريض')}>احسب وأرسل العرض</button>
+              {d.status === 'PENDING_PREAPPROVAL' && (
+                <button className="ghost" disabled={busy} onClick={() => run(async () => {
+                  await api.post(`/requests/${id}/quote`, { discountPct: discount, approvedBy: approver ? Number(approver) : undefined, scheduledAt: localToIso(at), asCash: true });
+                  after();
+                }, 'انبعت عرض سعر نقدي للمريض')}>التأمين رفض: سعّر نقدي</button>
+              )}
             </section>
           )}
 
@@ -258,8 +265,9 @@ function Board({ staff, services, onAlerts }: { staff: Staff[]; services: Servic
 }
 
 function Episodes({ staff }: { staff: Staff[] }) {
-  const list = useLoad(() => api.get<any[]>('/episodes?status=ACTIVE'));
+  const list = useLoad(() => api.get<any[]>('/episodes').then((x) => x.filter((e) => ['ACTIVE', 'ON_HOLD'].includes(e.status))));
   const [open, setOpen] = useState<number | null>(null);
+  const [holdReason, setHoldReason] = useState('');
   const detail = useLoad(() => (open ? api.get<any>(`/episodes/${open}`) : Promise.resolve(null)), [open]);
   const { busy, run } = useAction();
   const toast = useToast();
@@ -286,7 +294,7 @@ function Episodes({ staff }: { staff: Staff[] }) {
             {list.data?.map((e) => (
               <tr key={e.id}>
                 <td data-label="المريض" className="lead">{e.full_name}<span className="cell-sub mono">{e.episode_no}</span></td>
-                <td data-label="التشخيص">{e.diagnosis}</td>
+                <td data-label="التشخيص">{e.diagnosis}{e.status === 'ON_HOLD' && <span className="cell-sub"><Pill status="ON_HOLD" label="معلّقة" /> {e.hold_reason}</span>}</td>
                 <td data-label="خطة الرعاية">{e.plan ? <span>{planAr(e.plan)}</span> : <Pill status="PENDING_INFO" label="بانتظار الطبيب" />}</td>
                 <td data-label="شفتات مفتوحة" className="mono">{e.open_shifts}</td>
                 <td data-label="الفوترة">{e.billing_cycle === 'WEEKLY' ? 'أسبوعي' : 'شهري'}</td>
@@ -300,6 +308,20 @@ function Episodes({ staff }: { staff: Staff[] }) {
         {!ep && <Loading card />}
         {ep && (
           <div className="stack">
+            {ep.status === 'ON_HOLD' ? (
+              <div className="notice warn">الرعاية معلّقة: {ep.hold_reason ?? '—'}. الممرضين ما بيقدروا يسجّلوا حضور لحد ما الطبيب أو المشرف يستأنفها.</div>
+            ) : (
+              <section className="action">
+                <h3>تعليق الرعاية</h3>
+                <p className="muted small">مثلاً دخول مستشفى أو سفر. الشفتات بتوقف وتنبيهات التأخير كمان، لحد الاستئناف.</p>
+                <div className="row">
+                  <Field label="السبب"><input id="hold-reason" value={holdReason} onChange={(e) => setHoldReason(e.target.value)} placeholder="دخل المستشفى" /></Field>
+                  <button className="danger" disabled={busy || holdReason.trim().length < 3} onClick={() => run(async () => {
+                    await api.post(`/episodes/${ep.id}/hold`, { reason: holdReason }); setHoldReason(''); detail.reload(); list.reload();
+                  }, 'انعلّقت الرعاية')}>تعليق</button>
+                </div>
+              </section>
+            )}
             {ep.carePlan ? (
               <section className="action">
                 <h3>بناء جدول الشفتات</h3>
@@ -411,17 +433,18 @@ function Alerts({ staff }: { staff: Staff[] }) {
 export function Coordinator(_: { me: Staff }) {
   const staff = useLoad(() => api.get<Staff[]>('/staff'));
   const services = useLoad(() => api.get<Service[]>('/services'));
-  const [tab, setTab] = useState<'board' | 'episodes' | 'alerts'>('board');
+  const [tab, setTab] = useState<'board' | 'episodes' | 'devices' | 'alerts'>('board');
   if (!staff.data || !services.data) return <Loading card />;
   return (
     <>
       <div className="subtabs" role="tablist">
-        {([['board', 'الطلبات'], ['episodes', 'الرعاية المنزلية والشفتات'], ['alerts', 'التنبيهات']] as const).map(([k, l]) => (
+        {([['board', 'الطلبات'], ['episodes', 'الرعاية المنزلية والشفتات'], ['devices', 'الأجهزة'], ['alerts', 'التنبيهات']] as const).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
       {tab === 'board' && <Board staff={staff.data} services={services.data} onAlerts={() => setTab('alerts')} />}
       {tab === 'episodes' && <Episodes staff={staff.data} />}
+      {tab === 'devices' && <Devices />}
       {tab === 'alerts' && <Alerts staff={staff.data} />}
     </>
   );

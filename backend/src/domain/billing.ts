@@ -22,7 +22,9 @@ export function previousPeriod(cycle: Exclude<BillingCycle, 'PER_VISIT'>, asOf: 
 }
 
 export interface BillableSource {
-  sourceType: 'SHIFT' | 'SHIFT_PLANNED' | 'SHIFT_ADJUST' | 'VISIT' | 'RENTAL' | 'SUPPLY';
+  sourceType: 'SHIFT' | 'SHIFT_PLANNED' | 'SHIFT_ADJUST' | 'VISIT' | 'RENTAL' | 'SUPPLY' | 'ORDER';
+  /** Service billed, for tax and insurer coverage of this line. */
+  serviceCode?: string;
   sourceId: number;
   description: string;
   qty: number;

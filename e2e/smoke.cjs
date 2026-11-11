@@ -397,6 +397,85 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   });
 
   // ---------------------------------------------------------------- layout checks
+  await step('Full closure: device delivered → hold/resume → discharge → device collected → final invoice → account closed', async () => {
+    // Doctor orders an oxygen concentrator; the delivery driver installs it (the rental starts).
+    let p = await page('phone');
+    await login(p, /Dr\. Sami/);
+    await p.getByRole('tab', { name: 'حالاتي' }).click();
+    await p.locator('.visit-head').first().click();
+    await p.getByLabel('الخدمة').selectOption('DEV-O2');
+    await p.getByRole('button', { name: 'إرسال' }).click();
+    await expectToast(p, /انبعت الأوردر/);
+    // Care put on hold (hospital) and resumed from the doctor's app.
+    await p.getByLabel('ملاحظة التعليق أو الاستئناف').fill('دخل المستشفى للمراقبة');
+    await p.getByRole('button', { name: 'تعليق الرعاية' }).click();
+    await expectToast(p, /انعلّقت الرعاية/);
+    await p.getByLabel('ملاحظة التعليق أو الاستئناف').fill('رجع للبيت ومستقر');
+    await p.getByRole('button', { name: 'استئناف الرعاية' }).click();
+    await expectToast(p, /رجعت الرعاية/);
+    await p.close();
+
+    p = await page('phone');
+    await login(p, /Khaled/);
+    await p.getByRole('tab', { name: 'أوردرات القسم' }).click();
+    await p.getByRole('button', { name: 'استلام' }).first().click();
+    await expectToast(p, /استلمت/);
+    await p.getByLabel('النتيجة').fill('تم التوصيل والتركيب وتدريب العائلة');
+    await p.getByLabel('الرقم التسلسلي للجهاز').fill('O2-2026-77');
+    await p.getByRole('button', { name: 'اعتماد وإرسال' }).click();
+    await expectToast(p, /بدأ الإيجار/);
+    await p.close();
+
+    p = await page();
+    await login(p, /Omar/);
+    await p.getByRole('tab', { name: 'الأجهزة' }).click();
+    await p.getByText('O2-2026-77').waitFor();
+    await shot(p, 'coordinator-devices');
+    await p.close();
+
+    // Doctor discharges; the account cannot close while the device is at home.
+    p = await page('phone');
+    await login(p, /Dr\. Sami/);
+    await p.getByRole('tab', { name: 'حالاتي' }).click();
+    await p.locator('.visit-head').first().click();
+    await p.getByText('إنهاء الرعاية (ملخص خروج)').click();
+    await p.getByLabel('ملخص الخروج').fill('أكمل الخطة، العائلة مدرّبة على الأكسجين والتنقل');
+    await p.getByRole('button', { name: 'إنهاء', exact: true }).click();
+    await expectToast(p, /انتهت الرعاية/);
+    await p.close();
+
+    p = await page('phone');
+    await login(p, /Khaled/);
+    await p.getByRole('tab', { name: 'استرجاع الأجهزة' }).click();
+    await p.getByRole('button', { name: 'استلام' }).first().click();
+    await p.getByRole('button', { name: 'تأكيد الاستلام' }).click();
+    await expectToast(p, /تم تسجيل استلام الجهاز/);
+    await noOverflow(p, 'driver pickups');
+    await p.close();
+
+    p = await page();
+    await login(p, /Huda/);
+    await p.getByRole('tab', { name: 'الإغلاق وذمم التأمين' }).click();
+    await p.getByRole('button', { name: 'الفاتورة النهائية' }).first().click();
+    await expectToast(p, /تمت الفوترة النهائية/);
+    await shot(p, 'finance-closing');
+    await p.close();
+
+    // Issue whatever is still a draft and settle every invoice of the episode; the account closes by itself.
+    const eps = await api('GET', '/episodes?status=DISCHARGED', null, 11);
+    const ep = eps.find((e) => e.full_name === 'فاطمة أحمد');
+    if (!ep) throw new Error('episode not discharged');
+    const invs = (await api('GET', '/invoices', null, 11)).filter((i) => i.episode_id === ep.id && i.status !== 'VOID');
+    for (const i of invs) {
+      if (i.status === 'DRAFT') await api('POST', `/invoices/${i.id}/issue`, {}, 11);
+      const full = await api('GET', `/invoices/${i.id}`, null, 11);
+      const paid = full.payments.reduce((a, x) => a + x.amount, 0);
+      if (full.patient_total - paid > 0) await api('POST', `/invoices/${i.id}/payments`, { method: 'CASH', amount: full.patient_total - paid }, 11);
+    }
+    const after = await api('GET', `/episodes/${ep.id}`, null, 3);
+    if (!after.closed_at) throw new Error('account did not close');
+  });
+
   await step('Every screen fits a phone (no sideways scroll)', async () => {
     const screens = [
       [/Omar/, null], [/Omar/, 'الرعاية المنزلية والشفتات'], [/Omar/, 'التنبيهات'], [/Lina/, null], [/Huda/, null], [/Admin/, null],

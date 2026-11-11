@@ -71,15 +71,74 @@ function EInvoiceMonitor() {
 }
 
 export function Finance() {
-  const [tab, setTab] = useState<'invoices' | 'einvoice'>('invoices');
+  const [tab, setTab] = useState<'invoices' | 'closing' | 'einvoice'>('invoices');
   return (
     <>
       <div className="subtabs" role="tablist">
         <button role="tab" aria-selected={tab === 'invoices'} className={tab === 'invoices' ? 'on' : ''} onClick={() => setTab('invoices')}>الفواتير والتحصيل</button>
+        <button role="tab" aria-selected={tab === 'closing'} className={tab === 'closing' ? 'on' : ''} onClick={() => setTab('closing')}>الإغلاق وذمم التأمين</button>
         <button role="tab" aria-selected={tab === 'einvoice'} className={tab === 'einvoice' ? 'on' : ''} onClick={() => setTab('einvoice')}>الفوترة الإلكترونية</button>
       </div>
-      {tab === 'invoices' ? <Invoices /> : <EInvoiceMonitor />}
+      {tab === 'invoices' && <Invoices />}
+      {tab === 'closing' && <Closing />}
+      {tab === 'einvoice' && <EInvoiceMonitor />}
     </>
+  );
+}
+
+/** Discharged patients waiting for their final invoice, and insurer balances still to collect. */
+function Closing() {
+  const eps = useLoad(() => api.get<any[]>('/episodes?status=DISCHARGED'));
+  const claims = useLoad(() => api.get<any[]>('/claims'));
+  const { busy, run } = useAction();
+  const [pay, setPay] = useState<Record<number, string>>({});
+  const waiting = (eps.data ?? []).filter((e) => !e.final_billed_at);
+  const closed = (eps.data ?? []).filter((e) => e.closed_at);
+  return (
+    <div className="split">
+      <div className="card">
+        <h2>بانتظار الفاتورة النهائية</h2>
+        <p className="small muted">مرضى خلّصوا الرعاية. الفاتورة النهائية بتحسب كل اللي ما انفوتر لحد خروجهم ورجوع الأجهزة. الحساب بينسكّر لحاله لما تندفع.</p>
+        {!eps.data && <Loading />}
+        {eps.data && !waiting.length && <Empty compact>ما في حالات بانتظار فاتورة نهائية.</Empty>}
+        <ul className="list">
+          {waiting.map((e) => (
+            <li key={e.id} className="list-row">
+              <div><strong>{e.full_name}</strong> <span className="mono small muted">{e.episode_no}</span><div className="small muted">خرج {fmtTime(e.discharged_at)}</div></div>
+              <button className="primary" disabled={busy} onClick={() => run(async () => {
+                const r = await api.post<{ invoiceId: number | null }>(`/episodes/${e.id}/final-invoice`);
+                eps.reload();
+                return r;
+              }, 'تمت الفوترة النهائية. إذا طلعت فاتورة، راجعها وأصدرها من الفواتير')}>الفاتورة النهائية</button>
+            </li>
+          ))}
+        </ul>
+        {closed.length > 0 && <p className="small muted">{closed.length} حساب مسكّر بالكامل.</p>}
+      </div>
+      <div className="card">
+        <h2>ذمم التأمين</h2>
+        <p className="small muted">حصة شركات التأمين اللي لسا ما انقبضت. سجّل التحويل لما يوصل (أو بيوصل تلقائياً من الـ ERP).</p>
+        {!claims.data && <Loading />}
+        {claims.data && !claims.data.length && <Empty compact>ما في ذمم مفتوحة على التأمين.</Empty>}
+        <ul className="list">
+          {claims.data?.map((c) => (
+            <li key={c.id}>
+              <div className="list-row">
+                <div><strong>{c.payer_name ?? 'تأمين'}</strong> · <span className="mono">{c.invoice_no}</span><div className="small muted">{c.full_name} · {fmtTime(c.issued_at)}</div></div>
+                <span className="mono">{jod(c.outstanding)}</span>
+              </div>
+              <div className="row">
+                <Field label="المبلغ المستلم (د.أ)"><input inputMode="decimal" value={pay[c.id] ?? ''} onChange={(e) => setPay({ ...pay, [c.id]: e.target.value })} placeholder={(c.outstanding / 1000).toFixed(3)} /></Field>
+                <button className="secondary" disabled={busy} onClick={() => run(async () => {
+                  await api.post(`/invoices/${c.id}/payer-payments`, { amount: Math.round(Number(pay[c.id] || c.outstanding / 1000) * 1000) });
+                  setPay({ ...pay, [c.id]: '' }); claims.reload();
+                }, 'تم تسجيل دفعة التأمين')}>تسجيل</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
 
@@ -91,6 +150,7 @@ function Invoices() {
   const inv = useLoad(() => (open ? api.get<any>(`/invoices/${open}`) : Promise.resolve(null)), [open]);
   const [method, setMethod] = useState('CASH');
   const [amount, setAmount] = useState('');
+  const [voidReason, setVoidReason] = useState('');
   const d = inv.data;
   const [showDoc, setShowDoc] = useState(false);
   const doc = useLoad(() => (open && showDoc ? api.get<any>(`/invoices/${open}/document`) : Promise.resolve(null)), [open, showDoc]);
@@ -175,6 +235,20 @@ function Invoices() {
                 </div>
                 <button className="primary" disabled={busy || !amount} onClick={() => run(async () => { await api.post(`/invoices/${d.id}/payments`, { method, amount: Math.round(Number(amount) * 1000) }); setAmount(''); refresh(); }, 'تم تسجيل الدفعة')}>تسجيل</button>
               </section>
+            )}
+            {d.payer_total > 0 && d.status !== 'DRAFT' && d.status !== 'VOID' && (
+              <p className="small">حصة التأمين: <strong className="mono">{jod(d.payer_total)}</strong> · انقبض <span className="mono">{jod(d.payer_paid ?? 0)}</span>{d.payer_paid >= d.payer_total ? ' · مسدّدة' : ''}</p>
+            )}
+            {d.status === 'VOID' && <div className="notice warn">ملغاة: {d.void_reason}{d.creditNote ? ` · إشعار دائن ${d.creditNote.invoice_no}` : ''}</div>}
+            {d.status !== 'VOID' && !d.credit_for && paid === 0 && !(d.payer_paid > 0) && (
+              <details className="action danger-zone">
+                <summary>إلغاء الفاتورة</summary>
+                <p className="small muted">{d.status === 'DRAFT' ? 'المسودة بتنلغى، والبنود بترجع للفوترة.' : 'بيطلع إشعار دائن بنفس المبلغ بالسالب وبينبعت لدائرة الضريبة، والبنود بترجع للفوترة.'}</p>
+                <div className="row">
+                  <Field label="السبب"><input id={`void-${d.id}`} value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="مثلاً: سعر غلط" /></Field>
+                  <button className="danger" disabled={busy || voidReason.trim().length < 5} onClick={() => run(async () => { await api.post(`/invoices/${d.id}/void`, { reason: voidReason }); setVoidReason(''); refresh(); }, 'انلغت الفاتورة')}>إلغاء الفاتورة</button>
+                </div>
+              </details>
             )}
             {d.payments.length > 0 && (
               <section className="action"><h3>الدفعات</h3><ul className="list">{d.payments.map((p: any) => <li key={p.id} className="list-row"><span>{METHOD_AR[p.method] ?? p.method}<span className="cell-sub">{fmtTime(p.at)}</span></span><span className="mono">{jod(p.amount)}</span></li>)}</ul></section>

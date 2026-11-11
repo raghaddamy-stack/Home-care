@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, escalationAr, fmtTime, jod, ROLE_AR, staffName, type Service, type Staff } from '../api';
 import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
 import { Icon } from '../icons';
+import { Devices } from './Devices';
 
 type Pos = { lat: number; lng: number };
 
@@ -343,6 +344,7 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
   const [plan, setPlan] = useState({ shiftHours: '12', hoursPerDay: '24', durationDays: '14', goals: '' });
   const [order, setOrder] = useState({ serviceCode: '', priority: 'ROUTINE', notes: '' });
   const [decision, setDecision] = useState<Record<number, string>>({});
+  const [holdNote, setHoldNote] = useState('');
   const d = ep.data;
   if (!d) return <Loading />;
   const pending = d.results.filter((r: any) => !r.acknowledged_by);
@@ -357,6 +359,20 @@ function DoctorCase({ id, services }: { id: number; services: Service[] }) {
         <div><span className="k">الحساسية</span><span>{JSON.parse(d.patient.allergies).join('، ') || '—'}</span></div>
         <div><span className="k">آخر NEWS2</span><span className="mono">{d.vitals[0] ? `${d.vitals[0].news2_total} · ${fmtTime(d.vitals[0].at)}` : '—'}</span></div>
       </div>
+
+      {['ACTIVE', 'ON_HOLD'].includes(d.status) && (
+        <div className={`notice ${d.status === 'ON_HOLD' ? 'warn' : 'ok'}`}>
+          {d.status === 'ON_HOLD' ? <strong>الرعاية معلّقة: {d.hold_reason ?? '—'}</strong> : <strong>الرعاية مستمرة</strong>}
+          <div className="row">
+            <input aria-label="ملاحظة التعليق أو الاستئناف" placeholder={d.status === 'ON_HOLD' ? 'رجع للبيت ومستقر…' : 'سبب التعليق: دخول مستشفى…'} value={holdNote} onChange={(x) => setHoldNote(x.target.value)} />
+            <button className={d.status === 'ON_HOLD' ? 'primary' : 'ghost'} disabled={busy || holdNote.trim().length < 3} onClick={() => run(async () => {
+              if (d.status === 'ON_HOLD') await api.post(`/episodes/${id}/resume`, { note: holdNote });
+              else await api.post(`/episodes/${id}/hold`, { reason: holdNote });
+              setHoldNote(''); ep.reload();
+            }, d.status === 'ON_HOLD' ? 'رجعت الرعاية، والمنسق انبلغ' : 'انعلّقت الرعاية')}>{d.status === 'ON_HOLD' ? 'استئناف الرعاية' : 'تعليق الرعاية'}</button>
+          </div>
+        </div>
+      )}
 
       {openEsc.map((e: any) => (
         <div key={e.id} className="notice bad">
@@ -473,6 +489,7 @@ function Worklist({ me }: { me: Staff }) {
   const list = useLoad(() => api.get<any[]>(`/orders?department=${dept}`));
   const { busy, run } = useAction();
   const [rep, setRep] = useState<Record<number, { text: string; critical: boolean }>>({});
+  const [serial, setSerial] = useState<Record<number, string>>({});
   return (
     <div className="stack">
       {!list.data && <Loading card />}
@@ -492,7 +509,8 @@ function Worklist({ me }: { me: Staff }) {
                 {(dept === 'LAB' || dept === 'RADIOLOGY') && (
                   <label className="check"><input type="checkbox" checked={rep[o.id]?.critical ?? false} onChange={(e) => setRep({ ...rep, [o.id]: { text: rep[o.id]?.text ?? '', critical: e.target.checked } })} /> نتيجة حرجة</label>
                 )}
-                <button className="primary block" disabled={busy || !rep[o.id]?.text} onClick={() => run(async () => { await api.post(`/orders/${o.id}/result`, { report: rep[o.id].text, critical: rep[o.id].critical }); list.reload(); }, 'انبعتت النتيجة للطبيب')}>اعتماد وإرسال</button>
+                {dept === 'EQUIPMENT' && <Field label="الرقم التسلسلي للجهاز"><input value={serial[o.id] ?? ''} onChange={(e) => setSerial({ ...serial, [o.id]: e.target.value })} /></Field>}
+                <button className="primary block" disabled={busy || !rep[o.id]?.text} onClick={() => run(async () => { await api.post(`/orders/${o.id}/result`, { report: rep[o.id].text, critical: rep[o.id].critical, serialNo: serial[o.id] || undefined }); list.reload(); }, dept === 'EQUIPMENT' ? 'انسجّل التسليم وبدأ الإيجار' : 'انبعتت النتيجة')}>اعتماد وإرسال</button>
               </div>
             )}
           </li>
@@ -507,8 +525,9 @@ export function FieldApp({ me }: { me: Staff }) {
   if (me.role === 'NURSE') tabs.unshift(['shifts', 'شفتاتي']);
   if (me.role === 'DOCTOR') tabs.push(['cases', 'حالاتي']);
   if (ROLE_DEPT[me.role]) tabs.push(['work', 'أوردرات القسم']);
+  if (me.role === 'DRIVER') tabs.push(['pickups', 'استرجاع الأجهزة']);
   const [tab, setTab] = useState(tabs[0][0]);
-  const TAB_IC: Record<string, string> = { visits: 'calendar', shifts: 'clock', cases: 'steth', work: 'lab' };
+  const TAB_IC: Record<string, string> = { visits: 'calendar', shifts: 'clock', cases: 'steth', work: 'lab', pickups: 'refresh' };
   const today = new Date().toLocaleDateString('ar-JO-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' });
   return (
     <div className="phone">
@@ -525,6 +544,7 @@ export function FieldApp({ me }: { me: Staff }) {
       {tab === 'shifts' && <Shifts me={me} />}
       {tab === 'cases' && <Doctor me={me} />}
       {tab === 'work' && <Worklist me={me} />}
+      {tab === 'pickups' && <Devices pickupOnly canExtend={false} />}
     </div>
   );
 }

@@ -64,6 +64,25 @@ export function createInvoice(
   return id;
 }
 
+/** A credit note that mirrors an invoice line by line (amounts, tax and shares negated exactly). */
+export function createCreditNote(db: Db, originalId: number, reason: string): number {
+  const o = db.get('SELECT * FROM invoices WHERE id = ?', originalId)!;
+  const id = db.insert('invoices', {
+    invoice_no: nextInvoiceNo(db), patient_id: o.patient_id, episode_id: o.episode_id, request_id: o.request_id, kind: o.kind,
+    subtotal: -(o.subtotal ?? o.total), tax_total: -(o.tax_total ?? 0), total: -o.total, payer_total: -o.payer_total, patient_total: -o.patient_total,
+    credit_for: o.id, void_reason: reason,
+  });
+  for (const l of db.all('SELECT * FROM invoice_lines WHERE invoice_id = ?', o.id)) {
+    db.insert('invoice_lines', {
+      invoice_id: id, source_type: l.source_type, source_id: l.source_id, description: `Cancels ${o.invoice_no}: ${l.description}`,
+      qty: -l.qty, unit_price: l.unit_price, amount: -l.amount, payer_amount: -l.payer_amount, patient_amount: -l.patient_amount,
+      service_code: l.service_code, tax_line: l.tax_line, tax_category: l.tax_category, tax_rate: l.tax_rate,
+      net_amount: l.net_amount == null ? null : -l.net_amount, tax_amount: l.tax_amount == null ? null : -l.tax_amount,
+    });
+  }
+  return id;
+}
+
 /** Issue an invoice: it becomes final, the e-invoice is queued (owner setting) and the ERP is told. */
 export function issueInvoice(db: Db, invoiceId: number, at: Date = new Date()) {
   db.update('invoices', invoiceId, { status: 'ISSUED', issued_at: at });
@@ -175,7 +194,9 @@ export function visitRoutes(db: Db): Router {
         if (it.line === 'DEV') {
           if (!body.rental) throw new HttpError(400, 'Device handover needs rental details and a signed handover form');
           const price = db.get(`SELECT unit_price FROM price_items WHERE service_code = ? AND payer_id IS NULL`, it.service_code);
+          const paidDays = Math.round(it.qty);
           out.rentalId = db.insert('rentals', {
+            paid_days: paidDays,
             patient_id: request.patient_id, request_id: request.id, service_code: it.service_code, serial_no: body.rental.serialNo,
             start_date: at, expected_return: body.rental.expectedReturn, daily_rate: price?.unit_price ?? 0, deposit: body.rental.deposit,
           });

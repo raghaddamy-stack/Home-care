@@ -7,7 +7,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import type { Db, Row } from '../db.js';
 import { audit, HttpError, requireRole, wrap, wrapAsync } from '../http.js';
-import { recordPayment } from '../payments.js';
+import { recordPayerPayment, recordPayment } from '../payments.js';
 import { cfg, type TaxCategory, type TaxLine } from '../settings.js';
 import { openApiSpec } from '../openapi.js';
 
@@ -67,6 +67,7 @@ function invoiceDto(db: Db, inv: Row) {
       net: money(inv.subtotal ?? inv.total), tax: money(inv.tax_total ?? 0), gross: money(inv.total),
       payerShare: money(inv.payer_total), patientShare: money(inv.patient_total),
       paid: money(payments.reduce((a, x) => a + x.amount, 0)),
+      payerPaid: money(inv.payer_paid ?? 0),
     },
     pricesIncludeTax: s.pricesIncludeTax,
     costCenter: s.erpCostCenter || null,
@@ -172,8 +173,15 @@ export function erpRoutes(db: Db): Router {
     const fils = Math.round(Number(body.amount) * 1000);
     if (fils <= 0) throw new HttpError(400, 'amount must be positive');
     const out = db.tx(() => {
+      if (body.method === 'INSURER') {
+        if (inv.payer_paid + fils > inv.payer_total) throw new HttpError(400, 'More than the insurer share');
+        const pp = recordPayerPayment(db, inv.id, { amount: fils, reference: body.reference ?? `ERP ${c.name}`, source: 'ERP', at: body.receivedAt });
+        const response = { payerPaymentId: pp.id, invoiceId: inv.id, payerPaid: money(pp.payerPaid), payerBalance: money(pp.payerBalance) };
+        db.insert('idempotency_keys', { client_id: c.id, key: idem, response, status: 201 });
+        return response;
+      }
       const r2 = recordPayment(db, inv.id, {
-        method: body.method === 'INSURER' ? 'TRANSFER' : body.method, amount: fils,
+        method: body.method, amount: fils,
         reference: body.reference ?? `ERP ${c.name}`, at: body.receivedAt, source: 'ERP',
       });
       const response = { paymentId: r2.id, invoiceId: inv.id, invoiceStatus: r2.status, paid: money(r2.paid), balance: money(r2.balance) };

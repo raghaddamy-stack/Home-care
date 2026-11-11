@@ -6,6 +6,7 @@ import { buildInvoiceLines, nextPeriod, previousPeriod, rentalDaysInPeriod, type
 import { audit, getOr404, HttpError, notify, now, requireRole, wrap } from '../http.js';
 import { createInvoice, issueInvoice } from './visits.js';
 import { recordPayment } from '../payments.js';
+import { maybeCloseEpisode } from '../closure.js';
 import { cfg } from '../settings.js';
 
 function unitPrice(db: Db, code: string, payerId: number | null): number {
@@ -31,10 +32,11 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
   const code = ep.shift_service_code ?? 'NRS-HOUR';
   const hourly = unitPrice(db, code, payerId);
 
+  // The final invoice sweeps every completed shift not billed yet; a periodic one only its period.
   const shifts = db.all(
     `SELECT * FROM shifts WHERE episode_id = ? AND status = 'COMPLETED' AND invoice_id IS NULL
      AND planned_start >= ? AND planned_start < ?`,
-    ep.id, period.from.toISOString(), period.to.toISOString(),
+    ep.id, kind === 'FINAL' ? '0000' : period.from.toISOString(), period.to.toISOString(),
   );
   const sources: BillableSource[] = shifts.map((s) => ({
     sourceType: 'SHIFT', sourceId: s.id, qty: s.billable_minutes / 60, unitPrice: hourly,
@@ -68,13 +70,26 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
     const days = rentalDaysInPeriod(new Date(rent.start_date), rent.returned_at ? new Date(rent.returned_at) : null, period);
     if (days > 0) sources.push({ sourceType: 'RENTAL', sourceId: rent.id, qty: days, unitPrice: rent.daily_rate, description: `${rent.service_code} rental (${days} days)` });
   }
+  // Lab, imaging and pharmacy orders delivered for the episode (devices are billed by rental day instead).
+  const orders = db.all(
+    `SELECT o.*, s.name_en FROM orders o JOIN services s ON s.code = o.service_code
+     WHERE o.episode_id = ? AND o.invoice_id IS NULL AND o.status IN ('VALIDATED','ACKNOWLEDGED') AND o.department != 'EQUIPMENT' AND o.created_at < ?`,
+    ep.id, kind === 'FINAL' ? '9999' : period.to.toISOString(),
+  );
+  for (const o of orders) {
+    sources.push({ sourceType: 'ORDER', sourceId: o.id, qty: 1, unitPrice: unitPrice(db, o.service_code, payerId), description: `${o.name_en} (order #${o.id})`, serviceCode: o.service_code });
+  }
+  for (const src of sources) if (src.sourceType === 'RENTAL') src.serviceCode = db.get<{ service_code: string }>('SELECT service_code FROM rentals WHERE id = ?', src.sourceId)?.service_code;
   if (sources.length === 0) return null;
 
   const covered: string[] = policy ? JSON.parse(policy.covered_codes) : [];
-  const copay = policy && covered.includes(code) ? policy.copay_pct : null;
+  // Each line is covered (co-pay applies) only if the insurer covers that service.
+  const copayFor = (src: BillableSource) => (policy && covered.includes(src.serviceCode ?? code) ? policy.copay_pct : null);
   const shown = advance ?? period;
-  const invoiceId = createInvoice(db, { patient_id: ep.patient_id, episode_id: ep.id, kind, period_from: shown.from, period_to: shown.to }, buildInvoiceLines(sources, copay));
+  const invoiceId = createInvoice(db, { patient_id: ep.patient_id, episode_id: ep.id, kind, period_from: shown.from, period_to: shown.to },
+    sources.map((src) => buildInvoiceLines([src], copayFor(src))[0]));
   for (const s of shifts) db.update('shifts', s.id, { invoice_id: invoiceId });
+  for (const o of orders) db.update('orders', o.id, { invoice_id: invoiceId });
   const nowIso = new Date().toISOString();
   for (const s of toSettle) db.update('shifts', s.id, { adjusted_at: nowIso });
   for (const s of planned) {
@@ -93,7 +108,7 @@ export function billingRoutes(db: Db): Router {
     const body = z.object({ asOf: z.string().datetime().optional(), cycle: z.enum(['WEEKLY', 'MONTHLY']).optional() }).parse(req.body ?? {});
     const asOf = body.asOf ? new Date(body.asOf) : now(req);
     const episodes = db.all(
-      `SELECT * FROM episodes WHERE status IN ('ACTIVE','ON_HOLD','DISCHARGED') AND (? IS NULL OR billing_cycle = ?)`,
+      `SELECT * FROM episodes WHERE status IN ('ACTIVE','ON_HOLD','DISCHARGED') AND final_billed_at IS NULL AND (? IS NULL OR billing_cycle = ?)`,
       body.cycle ?? null, body.cycle ?? null,
     );
     const created: number[] = [];
@@ -118,9 +133,19 @@ export function billingRoutes(db: Db): Router {
     requireRole(db, req, 'FINANCE');
     const ep = getOr404(db, 'episodes', req.params.id, 'Episode');
     if (ep.status !== 'DISCHARGED') throw new HttpError(409, 'Discharge the episode first');
-    const lastBilled = db.get<{ to: string | null }>(`SELECT MAX(period_to) AS "to" FROM invoices WHERE episode_id = ?`, ep.id)?.to;
-    const period = { from: new Date(lastBilled ?? ep.started_at), to: new Date(ep.discharged_at) };
-    const id = db.tx(() => invoiceEpisode(db, ep, period, 'FINAL'));
+    if (db.get(`SELECT 1 FROM rentals WHERE episode_id = ? AND status = 'ACTIVE'`, ep.id)) throw new HttpError(409, 'Collect the devices first: the final invoice bills rental days up to their return');
+    if (db.get(`SELECT 1 FROM invoices WHERE episode_id = ? AND kind = 'FINAL' AND status != 'VOID'`, ep.id)) throw new HttpError(409, 'The final invoice already exists');
+    // From the end of the last billed period to the later of discharge and the last device return.
+    const lastBilled = db.get<{ to: string | null }>(`SELECT MAX(period_to) AS "to" FROM invoices WHERE episode_id = ? AND status != 'VOID'`, ep.id)?.to;
+    const lastReturn = db.get<{ r: string | null }>(`SELECT MAX(returned_at) AS r FROM rentals WHERE episode_id = ?`, ep.id)?.r;
+    const end = [ep.discharged_at, lastReturn].filter(Boolean).map((x) => new Date(x as string)).reduce((a, b) => (a > b ? a : b));
+    const period = { from: new Date(lastBilled ?? ep.started_at), to: end };
+    const id = db.tx(() => {
+      const inv = invoiceEpisode(db, ep, period, 'FINAL');
+      db.update('episodes', ep.id, { final_billed_at: new Date() });
+      maybeCloseEpisode(db, ep.id);
+      return inv;
+    });
     return { invoiceId: id };
   }));
 
@@ -141,6 +166,8 @@ export function billingRoutes(db: Db): Router {
       ...inv,
       lines: db.all('SELECT * FROM invoice_lines WHERE invoice_id = ?', inv.id),
       payments: db.all('SELECT * FROM payments WHERE invoice_id = ?', inv.id),
+      payerPayments: db.all('SELECT * FROM payer_payments WHERE invoice_id = ?', inv.id),
+      creditNote: db.get('SELECT id, invoice_no FROM invoices WHERE credit_for = ?', inv.id) ?? null,
     };
   }));
 
@@ -156,6 +183,7 @@ export function billingRoutes(db: Db): Router {
     );
     if (mismatch) throw new HttpError(409, 'Invoice hours do not match attendance (BR-72)');
     issueInvoice(db, inv.id, now(req));
+    maybeCloseEpisode(db, inv.episode_id);
     notify(db, `patient:${inv.patient_id}`, 'SMS', `Invoice ${inv.invoice_no}: ${(inv.patient_total / 1000).toFixed(3)} JOD`);
     return { status: 'ISSUED' };
   }));

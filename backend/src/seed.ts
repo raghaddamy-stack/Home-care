@@ -45,6 +45,7 @@ export function seed(db: Db) {
       ['Khaled (driver)', 'DRIVER', 'M', 1],
       ['Huda (finance)', 'FINANCE', 'F', 1],
       ['Salma (supervisor)', 'SUPERVISOR', 'F', 1],
+      ['Rami (pharmacist)', 'PHARMACIST', 'M', 1],
     ];
     for (const [name, role, gender, zone] of staff) db.insert('staff', { name, role, gender, zone_id: zone, licence_expiry: '2028-12-31' });
   });
