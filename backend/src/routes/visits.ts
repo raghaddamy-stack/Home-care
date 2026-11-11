@@ -9,7 +9,8 @@ import { splitShares, taxFor, taxLineFor } from '../domain/tax.js';
 import { onInvoiceIssued } from '../einvoice/service.js';
 import { recordPayment } from '../payments.js';
 import { noShowFee, prepaymentRequired } from '../domain/patientPolicy.js';
-import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap, wrapAsync, requireStaff } from '../http.js';
+import { ensureStock, itemsFor, queueGoodsIssue } from '../stock.js';
 import { noShowDates, setStatus, visitFee } from './requests.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
@@ -167,8 +168,10 @@ export function visitRoutes(db: Db): Router {
   }));
 
   // Direct service done: result / device handover, invoice from the accepted quote, payment.
-  r.post('/:id/complete', wrap((req) => {
+  r.post('/:id/complete', wrapAsync(async (req) => {
     const body = z.object({
+      // Materials actually used, when they differ from the service's mapped material.
+      stockItems: z.array(z.object({ material: z.string().min(1), qty: z.number().positive() })).optional(),
       result: z.object({ report: z.string(), critical: z.boolean().default(false) }).optional(),
       rental: z.object({ serialNo: z.string(), expectedReturn: z.string(), handoverSigned: z.literal(true), deposit: z.number().int().default(0) }).optional(),
       payment: z.object({ method: z.enum(['CASH', 'CARD', 'LINK', 'TRANSFER', 'CLIQ']), amount: z.number().int().positive(), reference: z.string().optional() }).optional(),
@@ -177,9 +180,14 @@ export function visitRoutes(db: Db): Router {
     if (visit.status !== 'CHECKED_IN') throw new HttpError(409, 'Check in first');
     if (request.route !== 'DIRECT') throw new HttpError(409, 'Assessment and nursing visits are completed by opening an episode');
     const at = now(req);
+    const reqItems = db.all('SELECT i.*, s.department, s.line, s.name_en FROM request_items i JOIN services s ON s.code = i.service_code WHERE request_id = ?', request.id);
+    // Stock first: a device counts as one unit (its quantity is rental days); the owner decides warn or block.
+    const stockItems = body.stockItems?.length ? body.stockItems : reqItems.flatMap((it) => itemsFor(it.service_code, it.line === 'DEV' ? 1 : it.qty));
+    const stock = await ensureStock(db, stockItems);
 
     return db.tx(() => {
-      const items = db.all('SELECT i.*, s.department, s.line, s.name_en FROM request_items i JOIN services s ON s.code = i.service_code WHERE request_id = ?', request.id);
+      const items = reqItems;
+      queueGoodsIssue(db, stockItems, { reference: `VISIT-${visit.id}`, patientId: request.patient_id, staffId: staff.id });
       const out: Record<string, unknown> = {};
       for (const it of items) {
         if (it.line === 'LAB' || it.line === 'IMG') {
@@ -223,7 +231,7 @@ export function visitRoutes(db: Db): Router {
       db.update('visits', visit.id, { status: 'COMPLETED', completed_at: at });
       setStatus(db, request, 'COMPLETED', staff.id);
       audit(db, staff.id, 'COMPLETE_VISIT', 'visits', visit.id);
-      return { status: 'COMPLETED', invoiceId, ...out };
+      return { status: 'COMPLETED', invoiceId, ...out, stockWarnings: stock.warnings };
     });
   }));
 

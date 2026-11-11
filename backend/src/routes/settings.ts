@@ -17,6 +17,7 @@ export function settingsRoutes(db: Db): Router {
       meta,
       warnings: usingDevKey() ? ['HC_SECRET_KEY غير مضبوط على السيرفر: المفاتيح السرية مشفّرة بمفتاح تجريبي.'] : [],
       staff: db.all(`SELECT id, name, role FROM staff WHERE active = 1 ORDER BY name`),
+      services: db.all(`SELECT code, name_ar FROM services ORDER BY line, code`),
       history: db.all(
         `SELECT h.*, s.name AS changed_by_name FROM settings_history h LEFT JOIN staff s ON s.id = h.changed_by ORDER BY h.id DESC LIMIT 50`,
       ),
@@ -53,6 +54,7 @@ export function settingsRoutes(db: Db): Router {
       genderMatch: s.genderMatch,
       requireConsent: s.requireConsent,
       checkInGraceMin: s.checkInGraceMin,
+      interimInvoicing: s.interimInvoicing,
     };
   }));
 

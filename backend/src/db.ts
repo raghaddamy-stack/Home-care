@@ -69,6 +69,8 @@ export class Db {
     add('rentals', 'damage_charge', 'INTEGER');
     add('rentals', 'paid_days', 'INTEGER');
     add('rentals', 'return_invoice_id', 'INTEGER');
+    // Rental days are billed once: each invoice moves billed_until forward.
+    add('rentals', 'billed_until', 'TEXT');
     this.raw.exec(`UPDATE invoices SET updated_at = created_at WHERE updated_at IS NULL; UPDATE patients SET updated_at = created_at WHERE updated_at IS NULL;`);
     // Keep updated_at current so the ERP can pull changes since its last sync.
     this.raw.exec(`

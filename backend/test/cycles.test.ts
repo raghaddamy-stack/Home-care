@@ -240,3 +240,49 @@ describe('cycle 5 · late cancellation: fee draft → issued → paid', () => {
     expect(inv.lines[0].tax_category).toBe('S'); // fees are standard-rated by default
   });
 });
+
+describe('cycle 6 · monthly patient billed mid-treatment on demand: nothing billed twice', () => {
+  it('interim invoices + the monthly run cover every shift and rental day exactly once', async () => {
+    const req = await post('/api/requests', { channel: 'CALL_CENTER', patient: patient('9800000006'), items: [{ serviceCode: 'NRS-HOUR' }] }, AGENT, '2026-11-01T06:00:00Z');
+    await post(`/api/requests/${req.id}/quote`, {}, COORD, '2026-11-01T06:10:00Z');
+    await post(`/api/requests/${req.id}/accept`, { evidence: 'phone' }, COORD, '2026-11-01T06:20:00Z');
+    const v = await post(`/api/requests/${req.id}/schedule`, { route: 'ASSESSMENT', staffId: DOCTOR, scheduledAt: '2026-11-01T08:00:00Z' }, COORD, '2026-11-01T06:30:00Z');
+    await post(`/api/visits/${v.visitId}/dispatch`, {}, DOCTOR, '2026-11-01T07:30:00Z');
+    await post(`/api/visits/${v.visitId}/check-in`, { ...HOME, consent: CONSENT }, DOCTOR, '2026-11-01T08:00:00Z');
+    const ep = await post('/api/episodes', { requestId: req.id, diagnosis: 'Long-term care', suitable: true, billingCycle: 'WEEKLY' }, DOCTOR, '2026-11-01T08:30:00Z');
+    // Finance switches this patient to monthly billing.
+    expect((await ok(call('put', `/api/episodes/${ep.id}/billing-cycle`, { cycle: 'MONTHLY' }, FINANCE))).billingCycle).toBe('MONTHLY');
+    await post(`/api/episodes/${ep.id}/care-plan`, { shiftHours: 8, hoursPerDay: 8, durationDays: 20 }, DOCTOR, '2026-11-01T09:00:00Z');
+    const bed = await post(`/api/episodes/${ep.id}/orders`, { serviceCode: 'DEV-BED' }, DOCTOR, '2026-11-02T06:00:00Z');
+    await post(`/api/orders/${bed.id}/result`, { report: 'Bed installed' }, DRIVER, '2026-11-02T08:00:00Z');
+    const roster = await post(`/api/episodes/${ep.id}/roster`, { start: '2026-11-02T07:00:00Z', nurseIds: [RANA] }, COORD, '2026-11-01T10:00:00Z');
+    const ids = roster.ids as number[];
+    for (let i = 0; i < ids.length; i++) {
+      const day = new Date(Date.UTC(2026, 10, 2 + i, 7)).toISOString();
+      const end = new Date(Date.UTC(2026, 10, 2 + i, 15)).toISOString();
+      await post(`/api/shifts/${ids[i]}/check-in`, HOME, RANA, day);
+      await post(`/api/shifts/${ids[i]}/check-out`, { handover: 'Stable, routine care' }, RANA, end);
+    }
+
+    // Mid-month invoices on demand (the owner allows it by default).
+    const a = await post(`/api/episodes/${ep.id}/interim-invoice`, { upTo: '2026-11-10' }, FINANCE);
+    const b = await post(`/api/episodes/${ep.id}/interim-invoice`, { upTo: '2026-11-17' }, FINANCE);
+    expect((await call('post', `/api/episodes/${ep.id}/interim-invoice`, { upTo: '2026-11-15' }, FINANCE)).status).toBe(409); // already billed past that
+    // The automatic monthly run on 1 December picks up the rest.
+    const run = await post('/api/billing/run', { asOf: '2026-12-01T06:00:00Z' }, FINANCE);
+    const all = [a.invoiceId, b.invoiceId, ...run.created];
+    const lines = (await Promise.all(all.map((id) => get(`/api/invoices/${id}`, FINANCE)))).flatMap((x: any) => x.lines);
+    const shiftIds = lines.filter((l: any) => l.source_type === 'SHIFT').map((l: any) => l.source_id).sort((x: number, y: number) => x - y);
+    expect(shiftIds).toEqual([...ids].sort((x, y) => x - y)); // every shift once
+    const rentalDays = lines.filter((l: any) => l.source_type === 'RENTAL').reduce((s: number, l: any) => s + l.qty, 0);
+    expect(rentalDays).toBe(29); // 2 Nov 08:00 → 1 Dec: 29 started days, billed across three invoices without overlap
+
+    // A voided interim invoice puts its items back for the next invoice.
+    await post(`/api/invoices/${b.invoiceId}/void`, { reason: 'Wrong period agreed with family' }, FINANCE);
+    expect(db.get(`SELECT COUNT(*) AS n FROM shifts WHERE episode_id = ? AND invoice_id IS NULL AND status = 'COMPLETED'`, ep.id)!.n).toBeGreaterThan(0);
+
+    // The owner can switch interim invoices off.
+    await ok(call('put', '/api/settings', { interimInvoicing: false }, ADMIN));
+    expect((await call('post', `/api/episodes/${ep.id}/interim-invoice`, {}, FINANCE)).status).toBe(403);
+  });
+});

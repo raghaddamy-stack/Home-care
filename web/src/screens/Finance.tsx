@@ -71,18 +71,72 @@ function EInvoiceMonitor() {
 }
 
 export function Finance() {
-  const [tab, setTab] = useState<'invoices' | 'closing' | 'einvoice'>('invoices');
+  const [tab, setTab] = useState<'invoices' | 'ongoing' | 'closing' | 'einvoice'>('invoices');
   return (
     <>
       <div className="subtabs" role="tablist">
         <button role="tab" aria-selected={tab === 'invoices'} className={tab === 'invoices' ? 'on' : ''} onClick={() => setTab('invoices')}>الفواتير والتحصيل</button>
+        <button role="tab" aria-selected={tab === 'ongoing'} className={tab === 'ongoing' ? 'on' : ''} onClick={() => setTab('ongoing')}>مرضى مستمرين</button>
         <button role="tab" aria-selected={tab === 'closing'} className={tab === 'closing' ? 'on' : ''} onClick={() => setTab('closing')}>الإغلاق وذمم التأمين</button>
         <button role="tab" aria-selected={tab === 'einvoice'} className={tab === 'einvoice' ? 'on' : ''} onClick={() => setTab('einvoice')}>الفوترة الإلكترونية</button>
       </div>
       {tab === 'invoices' && <Invoices />}
+      {tab === 'ongoing' && <Ongoing />}
       {tab === 'closing' && <Closing />}
       {tab === 'einvoice' && <EInvoiceMonitor />}
     </>
+  );
+}
+
+/** Patients still in care: their automatic cycle (weekly / monthly) and an on-demand invoice up to a date. */
+function Ongoing() {
+  const eps = useLoad(() => api.get<any[]>('/episodes').then((x) => x.filter((e) => ['ACTIVE', 'ON_HOLD'].includes(e.status))));
+  const policy = useLoad(() => api.get<any>('/settings/public'));
+  const { busy, run } = useAction();
+  const today = new Date().toISOString().slice(0, 10);
+  const [upTo, setUpTo] = useState<Record<number, string>>({});
+  const allowed = policy.data?.interimInvoicing !== false;
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div>
+          <h2>مرضى بالرعاية حالياً</h2>
+          <p className="small muted">الفوترة التلقائية بتمشي حسب دورة كل مريض. وإذا بدك تحاسب مريض قبل (مثلاً آخر الشهر)، طلّع فاتورة لحد تاريخ معيّن. كل شي انفوتر قبل ما بيرجع يتفوتر.</p>
+        </div>
+      </div>
+      {!allowed && <div className="notice warn">الفاتورة المرحلية متوقفة من إعدادات المالك.</div>}
+      {!eps.data && <Loading />}
+      {eps.data && !eps.data.length && <Empty compact>ما في مرضى بالرعاية حالياً.</Empty>}
+      <ul className="list">
+        {eps.data?.map((e) => (
+          <li key={e.id}>
+            <div className="list-row">
+              <div>
+                <strong>{e.full_name}</strong> <span className="mono small muted">{e.episode_no}</span>
+                {e.status === 'ON_HOLD' && <> <Pill status="ON_HOLD" /></>}
+                <div className="small muted">بدأت {fmtTime(e.started_at)}</div>
+              </div>
+              <div className="row-tight">
+                <label className="small muted" htmlFor={`cyc-${e.id}`}>الدورة</label>
+                <select id={`cyc-${e.id}`} value={e.billing_cycle} disabled={busy} onChange={(x) => run(async () => {
+                  await api.put(`/episodes/${e.id}/billing-cycle`, { cycle: x.target.value }); eps.reload();
+                }, 'تغيّرت دورة الفوترة')}>
+                  <option value="WEEKLY">أسبوعي</option><option value="MONTHLY">شهري</option>
+                </select>
+              </div>
+            </div>
+            {allowed && (
+              <div className="row">
+                <Field label="فاتورة لحد تاريخ"><input id={`upto-${e.id}`} type="date" max={today} value={upTo[e.id] ?? today} onChange={(x) => setUpTo({ ...upTo, [e.id]: x.target.value })} /></Field>
+                <button className="secondary" disabled={busy} onClick={() => run(async () => {
+                  await api.post(`/episodes/${e.id}/interim-invoice`, { upTo: upTo[e.id] ?? today });
+                }, 'طلعت الفاتورة كمسودة، راجعها وأصدرها من الفواتير')}><Icon name="receipt" />طلّع فاتورة</button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

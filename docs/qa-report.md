@@ -7,15 +7,16 @@
 | Layer | What | Result |
 |---|---|---|
 | Unit (domain rules) | NEWS2, pricing and tax, cancellation and no-show policy, rosters and working-time limits, billing periods, consent, escalation timers, state machine | 35 / 35 pass |
-| Full cycles | Five complete business cycles to a closed state (see below) | 5 / 5 pass |
+| Full cycles | Six complete business cycles to a closed state (see below) | 6 / 6 pass |
+| ERP stock | Mock, generic REST and SAP adapters; block / warn / ERP-down policies; goods issue posting | 6 / 6 pass |
 | API integration | Full flows through the HTTP API on a fresh database per test: intake → quote → schedule → visit → invoice; home-care episode → roster → shifts → billing; patient app; owner settings; e-invoicing; ERP API; webhooks | 62 / 62 pass |
 | Security | Every staff endpoint refuses anonymous callers; role checks; patient isolation; ERP keys; malformed or oversized input | 28 / 28 pass |
-| End-to-end UI (browser) | 18 steps across every persona, through the closing of the account on a real server, in desktop and phone sizes (`e2e/run.sh`) | 18 / 18 pass |
+| End-to-end UI (browser) | 20 steps across every persona: ERP stock check at the pharmacy, interim invoice, and the closing of the account on a real server, in desktop and phone sizes (`e2e/run.sh`) | 20 / 20 pass |
 | Exploratory | Hostile and invalid input probes (bad ids, SQL-like strings, script tags, negative amounts, wrong types, 2 MB bodies) | All handled with 4xx after fixes |
 
 Run it yourself:
 ```bash
-cd backend && npm test        # 130 API/unit tests incl. 5 full cycles
+cd backend && npm test        # 137 API/unit tests incl. 6 full cycles and ERP stock
 ./e2e/run.sh                  # browser walkthrough of every persona; report in e2e/out/report.md
 ```
 
@@ -30,6 +31,7 @@ cd backend && npm test        # 130 API/unit tests incl. 5 full cycles
 | 3 | Bed rental, 7 days paid → **extended** → returned late and **damaged** | Extra days and damage invoiced and paid, deposit refund flagged |
 | 4 | Wrong invoice → **void** → **credit note** (381, referencing the original) to the tax system | Original void, credit note accepted |
 | 5 | Late cancellation → fee draft → issued → paid | Paid, fee taxed as standard |
+| 6 | Monthly patient billed **mid-treatment on demand** twice, then the automatic monthly run; one interim invoice voided | Every shift and every rental day billed exactly once; voided items return to billing; the owner can switch interim invoices off |
 
 ### Broken links found by walking the cycles, and fixed
 
@@ -43,7 +45,8 @@ cd backend && npm test        # 130 API/unit tests incl. 5 full cycles
 | Insurer share | Nowhere to record the insurer's payment | Insurer payments (screen or ERP `method: INSURER`), and an open insurer balances list |
 | Insurer refusal | The request stayed stuck in "waiting for the insurer" | Re-quote as cash |
 | Account closure | No closed state | Closes automatically once discharged, devices back, final billing done and every invoice issued and paid |
-| Pharmacy | No pharmacist account, so pharmacy orders could not be completed | Pharmacist added to the demo staff |
+| Pharmacy | No pharmacist account, and the pharmacist role had no screen, so pharmacy orders could not be completed | Pharmacist added to the demo staff and given the field app (department worklist) |
+| Rental days | Periodic and final invoices could bill the same rental day twice when periods met mid-day | Each rental keeps `billed_until`; every invoice continues from there; a void moves it back |
 
 ## E2E scenario (browser)
 

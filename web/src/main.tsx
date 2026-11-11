@@ -17,7 +17,7 @@ type View = 'board' | 'intake' | 'field' | 'finance' | 'settings' | 'integration
 const VIEWS: Record<View, { label: string; short: string; icon: string; roles: string[] }> = {
   board: { label: 'لوحة المنسق', short: 'المنسق', icon: 'board', roles: ['COORDINATOR', 'SUPERVISOR', 'ADMIN'] },
   intake: { label: 'الكول سنتر', short: 'الكول سنتر', icon: 'phone', roles: ['AGENT', 'COORDINATOR', 'ADMIN'] },
-  field: { label: 'تطبيق الكادر', short: 'الميدان', icon: 'field', roles: ['NURSE', 'DOCTOR', 'LAB_TECH', 'RADIOGRAPHER', 'DRIVER'] },
+  field: { label: 'تطبيق الكادر', short: 'الميدان', icon: 'field', roles: ['NURSE', 'DOCTOR', 'LAB_TECH', 'RADIOGRAPHER', 'PHARMACIST', 'DRIVER'] },
   finance: { label: 'المالية', short: 'المالية', icon: 'wallet', roles: ['FINANCE', 'ADMIN'] },
   settings: { label: 'إعدادات المالك', short: 'الإعدادات', icon: 'settings', roles: ['ADMIN'] },
   integrations: { label: 'الربط مع الأنظمة', short: 'الربط', icon: 'plug', roles: ['ADMIN'] },

@@ -6,9 +6,10 @@ import type { Db, Row } from '../db.js';
 import { needsEscalation, scoreNews2 } from '../domain/news2.js';
 import { billableMinutes, buildRoster, distanceMetres, isLate, SHIFT_PATTERNS, workingTimeViolations, type TimeSlot } from '../domain/shifts.js';
 import { dueAt, isOverdue, timerFor } from '../domain/escalation.js';
-import { audit, getOr404, HttpError, notify, now, requireRole, wrap, requireStaff } from '../http.js';
+import { audit, getOr404, HttpError, notify, now, requireRole, wrap, wrapAsync, requireStaff } from '../http.js';
 import { assertStaffAvailable, genderCheck, setStatus } from './requests.js';
 import { servicePrice } from './lifecycle.js';
+import { ensureStock, itemsFor, queueGoodsIssue } from '../stock.js';
 import { ConsentInput, ensureConsent } from './consent.js';
 
 /**
@@ -159,7 +160,7 @@ export function clinicalRoutes(db: Db): Router {
         episode_no: `EP-${String(n).padStart(6, '0')}`, patient_id: request.patient_id, request_id: request.id,
         doctor_id: staff.role === 'DOCTOR' ? staff.id : undefined, diagnosis: body.diagnosis,
         status: body.suitable ? 'ACTIVE' : 'REFERRED_OUT', billing_cycle: body.billingCycle,
-        shift_service_code: body.shiftServiceCode, policy_id: request.policy_id,
+        shift_service_code: body.shiftServiceCode, policy_id: request.policy_id, started_at: now(req),
       });
       db.insert('assessments', {
         episode_id: episodeId, by_staff_id: staff.id, history: body.history,
@@ -249,9 +250,13 @@ export function clinicalRoutes(db: Db): Router {
     return { status: 'ACCEPTED' };
   }));
 
-  r.post('/orders/:id/result', wrap((req, res) => {
+  r.post('/orders/:id/result', wrapAsync(async (req, res) => {
     const staff = requireRole(db, req, 'LAB_TECH', 'RADIOGRAPHER', 'PHARMACIST', 'DRIVER');
-    const body = z.object({ report: z.string().min(1), critical: z.boolean().default(false), serialNo: z.string().optional() }).parse(req.body);
+    const body = z.object({
+      report: z.string().min(1), critical: z.boolean().default(false), serialNo: z.string().optional(),
+      // What the pharmacy / store actually dispensed; defaults to the service's mapped material.
+      stockItems: z.array(z.object({ material: z.string().min(1), qty: z.number().positive() })).optional(),
+    }).parse(req.body);
     const o = getOr404(db, 'orders', req.params.id, 'Order');
     if (!['PLACED', 'ACCEPTED', 'IN_PROGRESS'].includes(o.status)) throw new HttpError(409, `Order is ${o.status}`);
     const at = now(req);
@@ -260,7 +265,10 @@ export function clinicalRoutes(db: Db): Router {
     const request = !ep && o.request_id ? getOr404(db, 'service_requests', o.request_id, 'Request') : undefined;
     const patientId = ep?.patient_id ?? request?.patient_id;
     if (!patientId) throw new HttpError(409, 'Order has no patient');
+    const stockItems = itemsFor(o.service_code, 1, body.stockItems);
+    const stock = await ensureStock(db, stockItems);
     const out = db.tx(() => {
+      queueGoodsIssue(db, stockItems, { reference: `ORDER-${o.id}`, serviceCode: o.service_code, patientId, staffId: staff.id });
       const id = db.insert('results', {
         order_id: o.id, patient_id: patientId, report: body.report, critical: body.critical, validated_by: staff.id, created_at: at,
         // Outpatient results go to the patient straight away unless critical (same rule as at the visit).
@@ -285,9 +293,10 @@ export function clinicalRoutes(db: Db): Router {
       } else {
         notify(db, `patient:${patientId}`, 'PUSH', 'Your result is ready');
       }
-      return { id, critical: body.critical };
+      return { id, critical: body.critical, stockWarnings: stock.warnings };
     });
     res.status(201).json(out);
+    return undefined;
   }));
 
   // Doctor reviews the result in the EMR; it is then released to the patient app.

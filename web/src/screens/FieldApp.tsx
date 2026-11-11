@@ -2,9 +2,10 @@
 // doctor case list (care plan, orders, results), and department worklists.
 import { useState } from 'react';
 import { api, escalationAr, fmtTime, jod, ROLE_AR, staffName, type Service, type Staff } from '../api';
-import { Empty, Field, Loading, Pill, useAction, useLoad } from '../ui';
+import { Empty, Field, Loading, Pill, useAction, useLoad, useToast } from '../ui';
 import { Icon } from '../icons';
 import { Devices } from './Devices';
+import { StockBox, type StockItem } from '../StockBox';
 
 type Pos = { lat: number; lng: number };
 
@@ -490,6 +491,8 @@ function Worklist({ me }: { me: Staff }) {
   const { busy, run } = useAction();
   const [rep, setRep] = useState<Record<number, { text: string; critical: boolean }>>({});
   const [serial, setSerial] = useState<Record<number, string>>({});
+  const [stockItems, setStockItems] = useState<Record<number, StockItem[] | undefined>>({});
+  const toast = useToast();
   return (
     <div className="stack">
       {!list.data && <Loading card />}
@@ -509,8 +512,9 @@ function Worklist({ me }: { me: Staff }) {
                 {(dept === 'LAB' || dept === 'RADIOLOGY') && (
                   <label className="check"><input type="checkbox" checked={rep[o.id]?.critical ?? false} onChange={(e) => setRep({ ...rep, [o.id]: { text: rep[o.id]?.text ?? '', critical: e.target.checked } })} /> نتيجة حرجة</label>
                 )}
+                {dept !== 'LAB' && dept !== 'RADIOLOGY' && <StockBox serviceCode={o.service_code} editable={dept === 'PHARMACY'} onItems={(items) => setStockItems((x) => ({ ...x, [o.id]: items }))} />}
                 {dept === 'EQUIPMENT' && <Field label="الرقم التسلسلي للجهاز"><input value={serial[o.id] ?? ''} onChange={(e) => setSerial({ ...serial, [o.id]: e.target.value })} /></Field>}
-                <button className="primary block" disabled={busy || !rep[o.id]?.text} onClick={() => run(async () => { await api.post(`/orders/${o.id}/result`, { report: rep[o.id].text, critical: rep[o.id].critical, serialNo: serial[o.id] || undefined }); list.reload(); }, dept === 'EQUIPMENT' ? 'انسجّل التسليم وبدأ الإيجار' : 'انبعتت النتيجة')}>اعتماد وإرسال</button>
+                <button className="primary block" disabled={busy || !rep[o.id]?.text} onClick={() => run(async () => { const out = await api.post<{ stockWarnings?: string[] }>(`/orders/${o.id}/result`, { report: rep[o.id].text, critical: rep[o.id].critical, serialNo: serial[o.id] || undefined, stockItems: stockItems[o.id]?.length ? stockItems[o.id] : undefined }); if (out.stockWarnings?.length) toast(`تنبيه مخزون: ${out.stockWarnings.join('، ')}`, 'err'); list.reload(); }, dept === 'EQUIPMENT' ? 'انسجّل التسليم وبدأ الإيجار' : 'انبعتت النتيجة')}>اعتماد وإرسال</button>
               </div>
             )}
           </li>

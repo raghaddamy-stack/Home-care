@@ -397,6 +397,54 @@ const isoLocal = (d) => { const p = (n) => String(n).padStart(2, '0'); return `$
   });
 
   // ---------------------------------------------------------------- layout checks
+  await step('ERP stock: pharmacist blocked when the store is empty, dispenses once stocked; goods issue posted', async () => {
+    await api('PUT', '/settings', { stockProvider: 'MOCK', stockMaterials: { 'PHA-DELIVERY': 'MAT-MED-PACK' } }, 1);
+    await api('PUT', '/stock/mock', { material: 'MAT-MED-PACK', available: 0 }, 1);
+    let p = await page('phone');
+    await login(p, /Dr\. Sami/);
+    await p.getByRole('tab', { name: 'حالاتي' }).click();
+    await p.locator('.visit-head').first().click();
+    await p.getByLabel('الخدمة').selectOption('PHA-DELIVERY');
+    await p.getByRole('button', { name: 'إرسال' }).click();
+    await expectToast(p, /انبعت الأوردر/);
+    await p.close();
+
+    p = await page('phone');
+    await login(p, /Rami/);
+    await p.getByRole('tab', { name: 'أوردرات القسم' }).click();
+    await p.getByRole('button', { name: /استلام/ }).first().click();
+    await expectToast(p, /استلمت/);
+    await p.locator('.stock-box.short').waitFor({ timeout: 5000 });
+    await p.getByLabel('النتيجة').fill('أدوية الأسبوع');
+    await p.getByRole('button', { name: 'اعتماد وإرسال' }).click();
+    await expectToast(p, /الكمية مش متوفرة بالمخزن/);
+    await shot(p, 'pharmacy-stock-blocked');
+    await api('PUT', '/stock/mock', { material: 'MAT-MED-PACK', available: 10 }, 1);
+    await p.reload();
+    await p.getByRole('tab', { name: 'أوردرات القسم' }).click();
+    await p.locator('.stock-box.ok').waitFor({ timeout: 5000 });
+    await p.getByLabel('النتيجة').fill('أدوية الأسبوع');
+    await p.getByRole('button', { name: 'اعتماد وإرسال' }).click();
+    await expectToast(p, /انبعتت النتيجة/);
+    await p.close();
+    await new Promise((r) => setTimeout(r, 3000)); // background job posts the goods issue
+    const mv = await api('GET', '/stock/movements', null, 1);
+    if (!mv.items.some((m) => m.material === 'MAT-MED-PACK' && m.status === 'POSTED')) throw new Error('goods issue not posted');
+    const left = (await api('GET', '/stock/mock', null, 1)).find((m) => m.material === 'MAT-MED-PACK').available;
+    if (left !== 9) throw new Error(`stock not reduced: ${left}`);
+  });
+
+  await step('Finance: interim (e.g. month-end) invoice for a patient still in care', async () => {
+    const p = await page();
+    await login(p, /Huda/);
+    await p.getByRole('tab', { name: 'مرضى مستمرين' }).click();
+    await p.getByRole('button', { name: 'طلّع فاتورة' }).first().click();
+    const t = await lastToast(p);
+    if (!/طلعت الفاتورة|ما في شي جديد|انفوتر لحد/.test(t)) throw new Error(`unexpected message: "${t}"`);
+    await shot(p, 'finance-ongoing');
+    await p.close();
+  });
+
   await step('Full closure: device delivered → hold/resume → discharge → device collected → final invoice → account closed', async () => {
     // Doctor orders an oxygen concentrator; the delivery driver installs it (the rental starts).
     let p = await page('phone');

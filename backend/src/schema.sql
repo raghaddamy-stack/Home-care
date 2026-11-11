@@ -469,3 +469,27 @@ CREATE TABLE IF NOT EXISTS payer_payments (
   source TEXT NOT NULL DEFAULT 'HOME_CARE',
   at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Goods issues to post to the ERP when stock is dispensed (retried until the ERP confirms).
+CREATE TABLE IF NOT EXISTS stock_movements (
+  id INTEGER PRIMARY KEY,
+  reference TEXT NOT NULL,                    -- e.g. ORDER-12, VISIT-7
+  material TEXT NOT NULL,
+  qty REAL NOT NULL,
+  service_code TEXT,
+  patient_id INTEGER REFERENCES patients(id),
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','POSTED','FAILED')),
+  erp_document TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  created_by INTEGER REFERENCES staff(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  posted_at TEXT
+);
+
+-- Demo stock for the MOCK provider (stands in for the ERP warehouse).
+CREATE TABLE IF NOT EXISTS stock_mock (
+  material TEXT PRIMARY KEY,
+  available REAL NOT NULL
+);

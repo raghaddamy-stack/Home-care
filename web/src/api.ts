@@ -13,6 +13,39 @@ export const setStaff = (id: number | null) => { staffId = id; };
 let patientToken: string | null = null;
 export const setPatientToken = (t: string | null) => { patientToken = t; };
 
+/** Arabic wording for the server's business-rule messages (the API keeps English for integrations). */
+const ERRORS_AR: [RegExp, string | ((m: RegExpMatchArray) => string)][] = [
+  [/^Not enough stock of ([^:]+): need ([\d.]+), available ([\d.-]+)/, (m) => `الكمية مش متوفرة بالمخزن: ${m[1]} (المطلوب ${m[2]}، الموجود ${m[3]})`],
+  [/^Stock could not be checked in the ERP/, 'ما قدرنا نفحص المخزون بالـ ERP. جرّب كمان شوي أو اسأل المستودع'],
+  [/^Already billed up to (\S+)/, (m) => `انفوتر لحد ${m[1]}. اختار تاريخ بعده`],
+  [/^Nothing to bill up to that date/, 'ما في شي جديد للفوترة لحد هالتاريخ'],
+  [/^An invoice for this period already exists/, 'في فاتورة لنفس الفترة'],
+  [/^Interim invoices are switched off/, 'الفاتورة المرحلية متوقفة من إعدادات المالك'],
+  [/^Care has ended: use the final invoice/, 'الرعاية خلصت: استخدم الفاتورة النهائية'],
+  [/^Care is on hold/, 'الرعاية معلّقة. لازم الطبيب أو المشرف يستأنفها قبل الحضور'],
+  [/^Collect the devices first/, 'لازم الأجهزة ترجع أول، لأنه الفاتورة النهائية بتحسب الإيجار لحد يوم الإرجاع'],
+  [/^The final invoice already exists/, 'الفاتورة النهائية موجودة'],
+  [/^Discharge the episode first/, 'لازم الطبيب ينهي الرعاية أول'],
+  [/^Refund the payments recorded/, 'لازم تسترد الدفعات المسجّلة قبل إلغاء الفاتورة'],
+  [/^A credit note cannot be voided/, 'الإشعار الدائن ما بينلغى'],
+  [/^Device already returned/, 'الجهاز راجع من قبل'],
+  [/^Describe the damage or set a charge/, 'اكتب وصف الضرر أو كلفته'],
+  [/^More than the insurer share/, 'المبلغ أكثر من حصة التأمين'],
+  [/^This invoice has no insurer share/, 'هاي الفاتورة ما إلها حصة تأمين'],
+  [/^Consent missing/, 'لازم موافقة المريض الموقّعة قبل البدء'],
+  [/^Staff licence expired/, 'رخصة الموظف منتهية'],
+  [/^You are (\d+) m from the patient address/, (m) => `أنت بعيد ${m[1]} متر عن عنوان المريض`],
+  [/^Wrong visit code/, 'رمز الزيارة غلط'],
+  [/^Invoice hours do not match attendance/, 'ساعات الفاتورة مش مطابقة لسجل الحضور'],
+];
+export function errorAr(msg: string): string {
+  for (const [re, ar] of ERRORS_AR) {
+    const m = msg.match(re);
+    if (m) return typeof ar === 'string' ? ar : ar(m);
+  }
+  return msg;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -25,7 +58,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const issues = data.issues?.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('، ');
-    throw new ApiError(res.status, issues ? `${data.error} (${issues})` : data.error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, issues ? `${errorAr(data.error)} (${issues})` : errorAr(data.error ?? `HTTP ${res.status}`));
   }
   return data as T;
 }

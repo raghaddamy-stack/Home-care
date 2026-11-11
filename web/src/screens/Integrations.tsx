@@ -9,7 +9,7 @@ const SCOPE_AR: Record<string, string> = {
   'customers:read': 'قراءة العملاء', 'customers:write': 'ربط أرقام العملاء', 'catalog:read': 'قائمة الخدمات', 'events:read': 'الأحداث',
 };
 
-export function Integrations() {
+function IntegrationsMain() {
   const data = useLoad(() => api.get<any>('/integrations'));
   const { busy, run } = useAction();
   const [name, setName] = useState('SAP S/4HANA');
@@ -103,5 +103,69 @@ export function Integrations() {
         </div>
       </div>
     </div>
+  );
+}
+
+const MOVE_AR: Record<string, [string, string]> = { PENDING: ['PLANNED', 'بالانتظار'], POSTED: ['RESOLVED', 'انسجّلت'], FAILED: ['HIGH', 'فشلت'] };
+
+/** Goods issues sent to the ERP when stock is dispensed, and the demo warehouse when the mock is on. */
+function StockMonitor() {
+  const data = useLoad(() => api.get<any>('/stock/movements'));
+  const mock = useLoad(() => api.get<any[]>('/stock/mock'));
+  const { busy, run } = useAction();
+  const [qty, setQty] = useState<Record<string, string>>({});
+  const d = data.data;
+  if (!d) return null;
+  return (
+    <div className="split" style={{ marginTop: 16 }}>
+      <div className="card">
+        <div className="card-head">
+          <div>
+            <h2>صرف المخزون (ERP)</h2>
+            <p className="small muted">{d.provider === 'OFF' ? 'فحص المخزون متوقف. شغّله من إعدادات المالك ← المخزون (ERP).' : 'كل صرف من الصيدلية أو التوصيل بينبعت للـ ERP كحركة صرف. إذا فشل، بيعيد المحاولة لحاله.'}</p>
+          </div>
+          <button className="secondary" disabled={busy || d.provider === 'OFF'} onClick={() => run(async () => { await api.post('/stock/process'); data.reload(); mock.reload(); }, 'تمت معالجة حركات المخزون')}>أرسل المعلّق الآن</button>
+        </div>
+        <div className="row-tight">{d.counts.map((c: any) => <Pill key={c.status} status={MOVE_AR[c.status]?.[0] ?? 'PLANNED'} label={`${MOVE_AR[c.status]?.[1] ?? c.status}: ${c.n}`} />)}</div>
+        {!d.items.length && <Empty compact>ما في حركات صرف بعد.</Empty>}
+        <ul className="list">
+          {d.items.slice(0, 30).map((m: any) => (
+            <li key={m.id} className="list-row">
+              <div>
+                <bdi dir="ltr" className="mono">{m.material}</bdi> × <span className="mono">{m.qty}</span> · <span className="small muted">{m.reference}{m.full_name ? ` · ${m.full_name}` : ''}</span>
+                <div className="small muted">{fmtTime(m.created_at)}{m.erp_document ? ` · مستند ${m.erp_document}` : ''}{m.last_error ? ` · ${m.last_error}` : ''}</div>
+              </div>
+              <Pill status={MOVE_AR[m.status][0]} label={MOVE_AR[m.status][1]} />
+            </li>
+          ))}
+        </ul>
+      </div>
+      {d.provider === 'MOCK' && mock.data && (
+        <div className="card">
+          <h2>المخزن التجريبي</h2>
+          <p className="small muted">بيقوم مقام مخزون الـ ERP بالوضع التجريبي. عدّل الكميات لتجرّب حالة نقص المخزون.</p>
+          <ul className="list">
+            {mock.data.map((m: any) => (
+              <li key={m.material} className="list-row">
+                <bdi dir="ltr" className="mono">{m.material}</bdi>
+                <div className="row-tight">
+                  <input aria-label={`كمية ${m.material}`} type="number" min={0} style={{ width: 90 }} value={qty[m.material] ?? String(m.available)} onChange={(e) => setQty({ ...qty, [m.material]: e.target.value })} />
+                  <button className="ghost" disabled={busy} onClick={() => run(async () => { await api.put('/stock/mock', { material: m.material, available: Number(qty[m.material] ?? m.available) }); mock.reload(); }, 'تم تحديث الكمية')}>حفظ</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Integrations() {
+  return (
+    <>
+      <IntegrationsMain />
+      <StockMonitor />
+    </>
   );
 }

@@ -26,7 +26,7 @@ function unitPrice(db: Db, code: string, payerId: number | null): number {
  * - with `advance`, the planned shifts of that coming period (owner setting nursingBillingMode = ADVANCE);
  * - device rental days inside `period`.
  */
-export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC' | 'FINAL', advance?: Period): number | null {
+export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC' | 'FINAL', advance?: Period, sweep = kind === 'FINAL'): number | null {
   const policy = ep.policy_id ? db.get('SELECT * FROM insurance_policies WHERE id = ?', ep.policy_id) : undefined;
   const payerId = policy?.payer_id ?? null;
   const code = ep.shift_service_code ?? 'NRS-HOUR';
@@ -36,7 +36,7 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
   const shifts = db.all(
     `SELECT * FROM shifts WHERE episode_id = ? AND status = 'COMPLETED' AND invoice_id IS NULL
      AND planned_start >= ? AND planned_start < ?`,
-    ep.id, kind === 'FINAL' ? '0000' : period.from.toISOString(), period.to.toISOString(),
+    ep.id, sweep ? '0000' : period.from.toISOString(), period.to.toISOString(),
   );
   const sources: BillableSource[] = shifts.map((s) => ({
     sourceType: 'SHIFT', sourceId: s.id, qty: s.billable_minutes / 60, unitPrice: hourly,
@@ -66,9 +66,16 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
     const mins = (new Date(sh.planned_end).getTime() - new Date(sh.planned_start).getTime()) / 60_000;
     sources.push({ sourceType: 'SHIFT_PLANNED', sourceId: sh.id, qty: mins / 60, unitPrice: hourly, description: `Nursing (planned) ${fmt(sh.planned_start)} (${mins / 60} h)` });
   }
+  // Rental days from where the last invoice stopped (billed_until), so no day is billed twice.
+  const rentalEnds = new Map<number, Date>();
   for (const rent of db.all(`SELECT * FROM rentals WHERE episode_id = ?`, ep.id)) {
-    const days = rentalDaysInPeriod(new Date(rent.start_date), rent.returned_at ? new Date(rent.returned_at) : null, period);
-    if (days > 0) sources.push({ sourceType: 'RENTAL', sourceId: rent.id, qty: days, unitPrice: rent.daily_rate, description: `${rent.service_code} rental (${days} days)` });
+    const start = new Date(Math.max(new Date(rent.start_date).getTime(), rent.billed_until ? new Date(rent.billed_until).getTime() : 0));
+    const days = rentalDaysInPeriod(start, rent.returned_at ? new Date(rent.returned_at) : null, sweep ? { from: start, to: period.to } : period);
+    if (days > 0) {
+      const from = new Date(Math.max(start.getTime(), sweep ? 0 : period.from.getTime()));
+      rentalEnds.set(rent.id, new Date(from.getTime() + days * 86_400_000));
+      sources.push({ sourceType: 'RENTAL', sourceId: rent.id, qty: days, unitPrice: rent.daily_rate, description: `${rent.service_code} rental (${days} days)` });
+    }
   }
   // Lab, imaging and pharmacy orders delivered for the episode (devices are billed by rental day instead).
   const orders = db.all(
@@ -90,6 +97,7 @@ export function invoiceEpisode(db: Db, ep: Row, period: Period, kind: 'PERIODIC'
     sources.map((src) => buildInvoiceLines([src], copayFor(src))[0]));
   for (const s of shifts) db.update('shifts', s.id, { invoice_id: invoiceId });
   for (const o of orders) db.update('orders', o.id, { invoice_id: invoiceId });
+  for (const [id, until] of rentalEnds) db.update('rentals', id, { billed_until: until });
   const nowIso = new Date().toISOString();
   for (const s of toSettle) db.update('shifts', s.id, { adjusted_at: nowIso });
   for (const s of planned) {
@@ -126,6 +134,33 @@ export function billingRoutes(db: Db): Router {
     });
     audit(db, staff.id, 'BILLING_RUN', 'invoices', 0, { asOf, created });
     return { created };
+  }));
+
+  // Interim invoice (e.g. monthly) while care continues: everything not billed yet, up to a date.
+  r.post('/episodes/:id/interim-invoice', wrap((req) => {
+    requireRole(db, req, 'FINANCE');
+    if (!cfg().interimInvoicing) throw new HttpError(403, 'Interim invoices are switched off in the owner settings');
+    const body = z.object({ upTo: z.string().min(10).optional() }).parse(req.body ?? {});
+    const ep = getOr404(db, 'episodes', req.params.id, 'Episode');
+    if (!['ACTIVE', 'ON_HOLD'].includes(ep.status)) throw new HttpError(409, ep.status === 'DISCHARGED' ? 'Care has ended: use the final invoice' : `Episode is ${ep.status}`);
+    const to = body.upTo ? new Date(body.upTo.length === 10 ? `${body.upTo}T23:59:59` : body.upTo) : now(req);
+    const lastBilled = db.get<{ to: string | null }>(`SELECT MAX(period_to) AS "to" FROM invoices WHERE episode_id = ? AND status != 'VOID'`, ep.id)?.to;
+    const from = new Date(lastBilled ?? ep.started_at);
+    if (to <= from) throw new HttpError(409, `Already billed up to ${from.toISOString().slice(0, 10)}`);
+    if (db.get('SELECT 1 FROM invoices WHERE episode_id = ? AND period_from = ?', ep.id, from.toISOString())) throw new HttpError(409, 'An invoice for this period already exists');
+    const id = db.tx(() => invoiceEpisode(db, ep, { from, to }, 'PERIODIC', undefined, true));
+    if (!id) throw new HttpError(409, 'Nothing to bill up to that date');
+    return { invoiceId: id, from, to };
+  }));
+
+  // Weekly or monthly automatic cycle for one patient.
+  r.put('/episodes/:id/billing-cycle', wrap((req) => {
+    const staff = requireRole(db, req, 'FINANCE', 'COORDINATOR');
+    const { cycle } = z.object({ cycle: z.enum(['WEEKLY', 'MONTHLY']) }).parse(req.body);
+    const ep = getOr404(db, 'episodes', req.params.id, 'Episode');
+    db.update('episodes', ep.id, { billing_cycle: cycle });
+    audit(db, staff.id, 'BILLING_CYCLE', 'episodes', ep.id, cycle);
+    return { id: ep.id, billingCycle: cycle };
   }));
 
   // Final invoice at discharge: everything not yet billed up to the discharge date.

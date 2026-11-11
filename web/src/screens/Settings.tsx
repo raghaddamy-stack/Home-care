@@ -8,7 +8,7 @@ interface Meta {
   key: string; group: string; label: string; help?: string; kind: string;
   min?: number; max?: number; step?: number; unit?: string; options?: { value: string; label: string }[]; roles?: string[]; default: unknown;
 }
-interface Payload { values: Record<string, any>; meta: Meta[]; staff: { id: number; name: string; role: string }[]; history: any[]; warnings?: string[] }
+interface Payload { values: Record<string, any>; meta: Meta[]; staff: { id: number; name: string; role: string }[]; history: any[]; warnings?: string[]; services?: { code: string; name_ar: string }[] }
 
 const LINES_AR: Record<string, string> = { LAB: 'المختبر', IMG: 'الأشعة', DEV: 'الأجهزة', DOC: 'زيارة الطبيب', NRS: 'التمريض', FEE: 'رسوم إلغاء / غياب' };
 const CAT_AR: Record<string, string> = { S: 'خاضع (S)', Z: 'صفر (Z)', O: 'معفى (O)' };
@@ -27,13 +27,14 @@ function display(m: Meta, v: any, staff: Payload['staff']): string {
     case 'staffList': return (v as number[]).map((id) => staffName(staff.find((s) => s.id === id)?.name) || `#${id}`).join('، ');
     case 'secret': return typeof v === 'string' ? (v ? 'قيمة جديدة' : 'فاضي') : v.set ? `محفوظ (…${v.last4})` : 'غير مدخل';
     case 'taxMap': return Object.entries(v as Record<string, any>).map(([k, r]) => `${LINES_AR[k] ?? k}: ${r.category}${r.category === 'S' ? ` ${r.rate}%` : ''}`).join('، ');
+    case 'serviceMap': return Object.entries(v as Record<string, string>).map(([k, x]) => `${k}: ${x}`).join('، ') || '—';
     case 'lineMap': case 'categoryMap': return Object.entries(v as Record<string, string>).filter(([, x]) => x).map(([k, x]) => `${LINES_AR[k] ?? k}: ${x}`).join('، ') || '—';
     case 'text': case 'url': return v || '—';
     default: return `${v}${m.unit ? ` ${m.unit}` : ''}`;
   }
 }
 
-function Control({ m, value, onChange, staff }: { m: Meta; value: any; onChange: (v: any) => void; staff: Payload['staff'] }) {
+function Control({ m, value, onChange, staff, services = [] }: { m: Meta; value: any; onChange: (v: any) => void; staff: Payload['staff']; services?: Payload['services'] }) {
   const id = `set-${m.key}`;
   switch (m.kind) {
     case 'boolean':
@@ -103,6 +104,18 @@ function Control({ m, value, onChange, staff }: { m: Meta; value: any; onChange:
                 <input type="number" min={0} max={100} aria-label={`نسبة ${LINES_AR[k]}`} disabled={r.category !== 'S'} value={r.rate} onChange={(e) => onChange({ ...value, [k]: { ...r, rate: Number(e.target.value) } })} />
                 <span>%</span>
               </div>
+            </div>
+          ))}
+        </div>
+      );
+    case 'serviceMap':
+      return (
+        <div className="map-grid">
+          {(services ?? []).map((sv) => (
+            <div key={sv.code} className="map-row two">
+              <span>{sv.name_ar} <bdi dir="ltr" className="mono small muted">{sv.code}</bdi></span>
+              <input dir="ltr" aria-label={`رقم المادة لـ ${sv.name_ar}`} placeholder="—" value={(value as Record<string, string>)[sv.code] ?? ''}
+                onChange={(e) => { const next = { ...value }; if (e.target.value) next[sv.code] = e.target.value; else delete next[sv.code]; onChange(next); }} />
             </div>
           ))}
         </div>
@@ -198,7 +211,7 @@ export function Settings() {
                   </span>
                 </div>
                 <div className="setting-control">
-                  {draft[m.key] !== undefined && <Control m={m} value={draft[m.key]} staff={staff} onChange={(v) => setDraft({ ...draft, [m.key]: v })} />}
+                  {draft[m.key] !== undefined && <Control m={m} value={draft[m.key]} staff={staff} services={data.data?.services} onChange={(v) => setDraft({ ...draft, [m.key]: v })} />}
                 </div>
               </div>
             );

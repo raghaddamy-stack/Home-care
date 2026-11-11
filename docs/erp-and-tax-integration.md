@@ -83,3 +83,47 @@ A typical CPI iFlow works like this:
 4. Call `ack` with the document number.
 
 Payments can come back through the `payment.created` webhook, or the ERP can post them with `POST /payments`.
+
+## 4. Stock in the ERP (check before dispensing, goods issue after)
+
+Owner settings → **المخزون (ERP)**:
+
+| Setting | Meaning |
+|---|---|
+| فحص المخزون قبل الصرف | `متوقف` / `تجريبي` (a demo warehouse inside the app) / `ERP عام (REST)` / `SAP S/4HANA (OData)` |
+| إذا الكمية مش كافية | **Block** the dispense (default) or **allow with a warning** |
+| إذا الـ ERP ما رد | **Allow** and post the goods issue later (default), or **block** |
+| رابط الـ ERP، اسم المستخدم، كلمة السر أو المفتاح | With a user: Basic auth. Without one: Bearer token. The key is stored encrypted |
+| Plant، Storage Location، Movement Type، مركز الكلفة | Where stock is taken from. SAP movement type `201` (goods issue to cost center) by default |
+| رقم المادة بالـ ERP لكل خدمة | Material for each service, e.g. `DEV-O2` → oxygen concentrator material. Only mapped services are checked |
+
+**When the check happens:**
+- When a **pharmacy**, **equipment** or **lab** order is completed from the department worklist.
+- When a **direct visit** is completed. A rented device counts as one unit; its quantity is the rental days, which is not stock.
+
+**What the users see:**
+- The pharmacist and the driver see the availability **before** pressing "اعتماد وإرسال".
+- The pharmacist can list the exact materials and quantities dispensed. They override the mapped material.
+
+**After the dispense:**
+1. A goods issue is queued (`stock_movements`).
+2. The background job posts it to the ERP and stores the ERP document number.
+3. A failed post is retried after 1, 5, 15, 60 and 240 minutes.
+4. A successful post emits the `stock.issued` event.
+
+The owner's **الربط مع الأنظمة** screen lists the movements and their status, and offers "أرسل المعلّق الآن".
+
+### Generic REST contract (any ERP)
+
+```
+GET  {base}/stock?material=MAT-1&plant=1000&location=0001        →  {"material":"MAT-1","available":12}
+POST {base}/goods-issues                                          →  {"documentNo":"GI-778"}
+     {"reference":"ORDER-12","plant":"1000","location":"0001","movementType":"201","costCenter":"HC-AMM",
+      "items":[{"material":"MAT-1","qty":1}]}
+```
+
+### SAP S/4HANA
+
+- **Availability:** `GET /sap/opu/odata/sap/API_MATERIAL_STOCK_SRV/A_MatlStkInAcctMod?$filter=Material eq '…' and Plant eq '…' and StorageLocation eq '…' and InventoryStockType eq '01'` sums `MatlWrhsStkQtyInMatlBaseUnit`. That is unrestricted stock.
+- **Goods issue:** first `GET` with `x-csrf-token: fetch`, then `POST /sap/opu/odata/sap/API_MATERIAL_DOCUMENT_SRV/A_MaterialDocumentHeader`. The body has `GoodsMovementCode` `03`, one `to_MaterialDocumentItem` per material with the plant, storage location, movement type and cost center, and the reference as the header text. The returned `MaterialDocument` is stored.
+- **Validate before go-live:** check the communication arrangement, the user's authorizations and the movement type with the SAP team. These APIs need the SAP communication scenarios for material stock and material documents.

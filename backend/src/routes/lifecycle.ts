@@ -44,6 +44,14 @@ function releaseSources(db: Db, invoiceId: number) {
   db.run('UPDATE shifts SET invoice_id = NULL, advance_minutes = NULL WHERE invoice_id = ?', invoiceId);
   db.run('UPDATE orders SET invoice_id = NULL WHERE invoice_id = ?', invoiceId);
   db.run('UPDATE rentals SET return_invoice_id = NULL WHERE return_invoice_id = ?', invoiceId);
+  // Rental days billed by this invoice become billable again.
+  for (const l of db.all(`SELECT source_id, qty FROM invoice_lines WHERE invoice_id = ? AND source_type = 'RENTAL'`, invoiceId)) {
+    const r = db.get<{ billed_until: string | null; start_date: string }>('SELECT billed_until, start_date FROM rentals WHERE id = ?', l.source_id);
+    if (r?.billed_until) {
+      const back = new Date(new Date(r.billed_until).getTime() - l.qty * DAY);
+      db.update('rentals', l.source_id, { billed_until: back <= new Date(r.start_date) ? null : back });
+    }
+  }
 }
 
 export function lifecycleRoutes(db: Db): Router {

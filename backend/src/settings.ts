@@ -30,6 +30,7 @@ export interface Settings {
   // Payment & billing
   directServicePayment: 'AT_DOOR' | 'BEFORE_BOOKING';
   nursingBillingMode: 'ARREARS' | 'ADVANCE';
+  interimInvoicing: boolean;
   // Staffing
   genderMatch: 'OFF' | 'WARN' | 'BLOCK';
   maxHoursPer7Days: number;
@@ -81,6 +82,17 @@ export interface Settings {
   erpGlAccounts: Record<TaxLine, string>;
   erpTaxCodes: Record<TaxCategory, string>;
   erpCostCenter: string;
+  // Stock (inventory) in the ERP
+  stockProvider: 'OFF' | 'MOCK' | 'GENERIC' | 'SAP';
+  stockMode: 'WARN' | 'BLOCK';
+  stockOnError: 'ALLOW' | 'BLOCK';
+  stockBaseUrl: string;
+  stockUser: string;
+  stockApiKey: string;
+  stockPlant: string;
+  stockLocation: string;
+  stockMovementType: string;
+  stockMaterials: Record<string, string>;
 }
 
 /** Revenue lines used for tax and accounting: the service lines, plus fees (cancellation / no-show). */
@@ -111,6 +123,7 @@ export const DEFAULTS: Settings = {
   partialCancelPct: 50,
   directServicePayment: 'AT_DOOR',
   nursingBillingMode: 'ARREARS',
+  interimInvoicing: true,
   genderMatch: 'WARN',
   maxHoursPer7Days: 60,
   minRestHours: 11,
@@ -157,12 +170,22 @@ export const DEFAULTS: Settings = {
   erpGlAccounts: { LAB: '', IMG: '', DEV: '', DOC: '', NRS: '', FEE: '' },
   erpTaxCodes: { S: '', Z: '', O: '' },
   erpCostCenter: '',
+  stockProvider: 'OFF',
+  stockMode: 'BLOCK',
+  stockOnError: 'ALLOW',
+  stockBaseUrl: '',
+  stockUser: '',
+  stockApiKey: '',
+  stockPlant: '',
+  stockLocation: '',
+  stockMovementType: '201',
+  stockMaterials: {},
 };
 
-type Kind = 'number' | 'money' | 'boolean' | 'select' | 'weekdays' | 'dates' | 'staff' | 'staffList' | 'text' | 'url' | 'secret' | 'taxMap' | 'lineMap' | 'categoryMap';
+type Kind = 'number' | 'money' | 'boolean' | 'select' | 'weekdays' | 'dates' | 'staff' | 'staffList' | 'text' | 'url' | 'secret' | 'taxMap' | 'lineMap' | 'categoryMap' | 'serviceMap';
 
 /** Settings stored encrypted and never sent back to the browser. */
-export const SECRET_KEYS: (keyof Settings)[] = ['einvoiceClientId', 'einvoiceSecretKey', 'erpWebhookSecret'];
+export const SECRET_KEYS: (keyof Settings)[] = ['einvoiceClientId', 'einvoiceSecretKey', 'erpWebhookSecret', 'stockApiKey'];
 
 export interface SettingMeta {
   key: keyof Settings;
@@ -208,6 +231,8 @@ export const META: SettingMeta[] = [
   { key: 'nursingBillingMode', group: 'الدفع والفوترة', label: 'فوترة التمريض الدوري', kind: 'select',
     help: 'مقدّماً: الفاتورة بتطلع على الشفتات المخططة للفترة الجاية، والفرق بالحضور الفعلي بيتسوّى بالفاتورة اللي بعدها.',
     options: [{ value: 'ARREARS', label: 'بعد انتهاء الفترة (حسب الحضور)' }, { value: 'ADVANCE', label: 'مقدّماً (حسب الجدول)' }] },
+  { key: 'interimInvoicing', group: 'الدفع والفوترة', label: 'المالية بتقدر تطلّع فاتورة مرحلية (مثلاً شهرية) والمريض لسا بالعلاج', kind: 'boolean',
+    help: 'فاتورة لكل اللي ما انفوتر لحد تاريخ بتختاره المالية، غير الدورة الأسبوعية أو الشهرية التلقائية. ما في شي بيتفوتر مرتين.' },
   { key: 'billingRoundMin', group: 'الدفع والفوترة', label: 'تقريب ساعات الحضور لأقرب', kind: 'number', min: 1, max: 60, unit: 'دقيقة' },
   { key: 'lateToleranceMin', group: 'الدفع والفوترة', label: 'تأخير مسموح بدون خصم من الساعات', kind: 'number', min: 0, max: 60, unit: 'دقيقة' },
 
@@ -263,6 +288,21 @@ export const META: SettingMeta[] = [
   { key: 'erpGlAccounts', group: 'ربط ERP', label: 'حساب الإيراد لكل نوع خدمة', kind: 'lineMap', help: 'مثلاً رقم الـ G/L Account بـ SAP.' },
   { key: 'erpTaxCodes', group: 'ربط ERP', label: 'رمز الضريبة بالـ ERP لكل فئة', kind: 'categoryMap', help: 'مثلاً Tax Code بـ SAP (O1, S1…).' },
   { key: 'erpCostCenter', group: 'ربط ERP', label: 'مركز الكلفة', kind: 'text' },
+
+  { key: 'stockProvider', group: 'المخزون (ERP)', label: 'فحص المخزون قبل الصرف', kind: 'select',
+    help: 'قبل ما الصيدلية أو التوصيل يصرفوا أي مادة، النظام بيسأل الـ ERP عن الكمية، وبعد الصرف بيسجّل حركة صرف (Goods Issue).',
+    options: [{ value: 'OFF', label: 'متوقف' }, { value: 'MOCK', label: 'تجريبي (مخزون داخلي للتجربة)' }, { value: 'GENERIC', label: 'ERP عام (REST)' }, { value: 'SAP', label: 'SAP S/4HANA (OData)' }] },
+  { key: 'stockMode', group: 'المخزون (ERP)', label: 'إذا الكمية مش كافية', kind: 'select', options: [
+    { value: 'BLOCK', label: 'امنع الصرف' }, { value: 'WARN', label: 'اسمح ونبّه' }] },
+  { key: 'stockOnError', group: 'المخزون (ERP)', label: 'إذا الـ ERP ما رد', kind: 'select', options: [
+    { value: 'ALLOW', label: 'اسمح بالصرف وسجّل الحركة لما يرجع' }, { value: 'BLOCK', label: 'امنع الصرف' }] },
+  { key: 'stockBaseUrl', group: 'المخزون (ERP)', label: 'رابط الـ ERP', kind: 'url', help: 'SAP: رابط السيرفر (مثلاً https://my-s4.example.com). ERP عام: أساس الـ API.' },
+  { key: 'stockUser', group: 'المخزون (ERP)', label: 'اسم المستخدم (اختياري)', kind: 'text', help: 'إذا انكتب، الدخول بـ Basic Auth بالمستخدم والمفتاح. وإذا فاضي، المفتاح بينبعت كـ Bearer token.' },
+  { key: 'stockApiKey', group: 'المخزون (ERP)', label: 'كلمة السر أو المفتاح', kind: 'secret' },
+  { key: 'stockPlant', group: 'المخزون (ERP)', label: 'المصنع / الفرع (Plant)', kind: 'text' },
+  { key: 'stockLocation', group: 'المخزون (ERP)', label: 'موقع التخزين (Storage Location)', kind: 'text' },
+  { key: 'stockMovementType', group: 'المخزون (ERP)', label: 'نوع حركة الصرف (Movement Type)', kind: 'text', help: 'SAP: 201 صرف على مركز كلفة (الافتراضي).' },
+  { key: 'stockMaterials', group: 'المخزون (ERP)', label: 'رقم المادة بالـ ERP لكل خدمة', kind: 'serviceMap', help: 'الخدمات اللي إلها رقم مادة بس بيتفحص مخزونها وبينسجّل صرفها. الصيدلي بيقدر يحدد مواد إضافية وقت الصرف.' },
 ];
 
 let current: Settings = structuredClone(DEFAULTS);
@@ -327,6 +367,17 @@ function validate(meta: SettingMeta, v: unknown, db: Db): unknown {
         if (r.category === 'S' && r.rate === 0) fail(`الفئة S لازم إلها نسبة (${line})`);
       }
       return Object.fromEntries(TAX_LINES.map((l) => [l, { category: m[l].category, rate: m[l].rate }]));
+    }
+    case 'serviceMap': {
+      const m = v as Record<string, unknown>;
+      if (!m || typeof m !== 'object' || Array.isArray(m)) fail('قيمة غير صحيحة');
+      const out: Record<string, string> = {};
+      for (const [code, mat] of Object.entries(m)) {
+        if (!db.get('SELECT 1 FROM services WHERE code = ?', code)) fail(`خدمة غير معروفة: ${code}`);
+        if (typeof mat !== 'string' || mat.length > 40) fail(`رقم مادة غير صحيح لـ ${code}`);
+        if ((mat as string).trim()) out[code] = (mat as string).trim();
+      }
+      return out;
     }
     case 'lineMap':
     case 'categoryMap': {

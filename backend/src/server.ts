@@ -6,6 +6,7 @@ import { Db } from './db.js';
 import { seed } from './seed.js';
 import { processEInvoiceQueue, setQueueKick } from './einvoice/service.js';
 import { deliverWebhooks } from './webhooks.js';
+import { processStockQueue } from './stock.js';
 import { checkLateShifts, runEscalationTimers } from './routes/clinical.js';
 import { expireQuotes } from './routes/requests.js';
 
@@ -32,6 +33,7 @@ const runJobs = async () => {
     runEscalationTimers(db, t);
     expireQuotes(db, t);
     await processEInvoiceQueue(db);
+    await processStockQueue(db);
     await deliverWebhooks(db);
   } catch (e) {
     console.error('background job failed', e);

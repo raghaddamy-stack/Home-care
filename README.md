@@ -52,6 +52,7 @@ Every business rule with a number or a choice is configurable by the owner (ADMI
 | Staff & shifts | staff gender preference (off / warn / block), max hours per 7 days, minimum rest, consecutive 24 h shifts, check-in grace, GPS radius |
 | Clinical | medical director, on-call doctors, critical-result and NEWS2 response times, recheck time, auto-release of normal results (0 = doctor review only), consent hard stop, age of majority |
 | Tax & e-invoicing | prices include tax, tax category and rate per service line, JoFotara on/mock/off, endpoint, Client ID and Secret Key (encrypted), seller TIN, name and income-source sequence, auto-submit, cash/receivable type |
+| ERP stock | check stock before dispensing (mock / generic REST / SAP), block or warn, behaviour when the ERP is down, plant, storage location, movement type, material per service; goods issues posted with retry |
 | ERP | webhook URL and signing secret, revenue G/L account per line, ERP tax code per category, cost center |
 | SLA, patient app, feedback | SLA targets on the coordinator board, OTP validity and attempts, session length, low-rating threshold and rating window |
 

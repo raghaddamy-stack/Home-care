@@ -2,6 +2,10 @@ import { Db } from './db.js';
 
 /** Reference data: services, cash + insurer prices, zones, staff. Prices in fils. */
 export function seed(db: Db) {
+  // Demo warehouse for the MOCK stock provider (idempotent).
+  for (const [m, q] of [['MAT-O2-CONC', 3], ['MAT-BED-ELEC', 2], ['MAT-WHEELCHAIR', 5], ['MAT-MED-PACK', 40], ['MAT-LAB-KIT', 100]] as const) {
+    db.run('INSERT OR IGNORE INTO stock_mock (material, available) VALUES (?, ?)', m, q);
+  }
   if (db.get('SELECT 1 FROM services LIMIT 1')) return;
   db.tx(() => {
     for (const z of ['Amman West', 'Amman East', 'Zarqa', 'Irbid']) db.insert('zones', { name: z });

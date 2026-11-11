@@ -667,3 +667,13 @@ code.key { display: block; font-family: var(--f-mono); font-size: 13px; backgrou
   .check input { margin-top: 0; }
   input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
 }
+
+/* Stock availability before dispensing */
+.stock-box { display: grid; gap: 6px; border-radius: var(--r-md, 10px); padding: 10px 12px; font-size: 14px; border: 1px solid var(--line); background: var(--surface-2); }
+.stock-box.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.stock-box.short { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: var(--bad-soft); color: var(--bad); }
+.stock-box.unknown { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: var(--warn-soft); }
+.stock-head { display: flex; align-items: center; gap: 6px; }
+.stock-box ul { margin: 0; padding-inline-start: 18px; display: grid; gap: 2px; }
+.stock-box details { display: grid; gap: 6px; }
+.stock-box summary { cursor: pointer; font-weight: 500; }

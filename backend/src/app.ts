@@ -12,6 +12,7 @@ import { feedbackRoutes } from './routes/feedback.js';
 import { consentRoutes } from './routes/consent.js';
 import { settingsRoutes } from './routes/settings.js';
 import { lifecycleRoutes } from './routes/lifecycle.js';
+import { stockRoutes } from './routes/stock.js';
 import { einvoiceRoutes } from './routes/einvoice.js';
 import { erpRoutes, integrationAdminRoutes } from './routes/erp.js';
 import { loadSettings } from './settings.js';
@@ -31,6 +32,7 @@ export function createApp(db: Db) {
   app.use('/api', consentRoutes(db));
   app.use('/api', settingsRoutes(db));
   app.use('/api', lifecycleRoutes(db));
+  app.use('/api', stockRoutes(db));
   app.use('/api', einvoiceRoutes(db));
   app.use('/api', integrationAdminRoutes(db));
   app.use('/api/erp/v1', erpRoutes(db));

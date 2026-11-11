@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto';
 import type { Db } from './db.js';
 import { cfg } from './settings.js';
 
-export type EventName = 'invoice.issued' | 'invoice.paid' | 'invoice.voided' | 'payment.created' | 'payer_payment.created' | 'einvoice.accepted' | 'einvoice.rejected' | 'episode.closed' | 'rental.returned';
+export type EventName = 'invoice.issued' | 'invoice.paid' | 'invoice.voided' | 'payment.created' | 'payer_payment.created' | 'einvoice.accepted' | 'einvoice.rejected' | 'episode.closed' | 'rental.returned' | 'stock.issued';
 
 export function emit(db: Db, event: EventName, data: Record<string, unknown>): number {
   return db.insert('webhook_events', {
