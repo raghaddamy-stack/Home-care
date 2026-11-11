@@ -60,7 +60,7 @@ export const openApiSpec = {
           erp: { type: 'object', properties: { documentNo: { type: 'string', nullable: true }, syncedAt: { type: 'string', nullable: true } } },
         },
       },
-      Event: { type: 'object', properties: { id: { type: 'integer' }, event: { type: 'string', enum: ['invoice.issued', 'invoice.paid', 'payment.created', 'einvoice.accepted', 'einvoice.rejected'] }, occurredAt: { type: 'string' }, data: { type: 'object' } } },
+      Event: { type: 'object', properties: { id: { type: 'integer' }, event: { type: 'string', enum: ['invoice.issued', 'invoice.paid', 'invoice.voided', 'payment.created', 'payer_payment.created', 'einvoice.accepted', 'einvoice.rejected', 'rental.returned', 'episode.closed'] }, occurredAt: { type: 'string' }, data: { type: 'object' } } },
     },
   },
   paths: {
@@ -90,7 +90,7 @@ export const openApiSpec = {
         responses: { 200: ok({ type: 'object' }) },
       },
       post: {
-        summary: 'Record a payment received in the ERP (scope payments:write). Idempotent per Idempotency-Key.',
+        summary: 'Record a payment received in the ERP (scope payments:write). method INSURER applies it to the insurer share. Idempotent per Idempotency-Key.',
         parameters: [{ name: 'Idempotency-Key', in: 'header', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
